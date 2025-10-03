@@ -1,0 +1,95 @@
+#pragma once
+
+#include <Arduino.h>
+// Use painlessMesh's TaskScheduler
+#include "painlessMesh.h"
+
+#define OFF_TIME 100UL
+
+const char* KNOCK_TAG = "Knocker";
+
+class Knocker {
+public:
+    static Knocker* instance;
+
+    Knocker(uint8_t pin, uint16_t tempo = 200)
+    : pin(pin), tempo(tempo)
+    {
+        pinMode(pin, OUTPUT);
+
+        scheduler.startNow();
+
+        instance = this;
+    };
+
+    void update() {
+        scheduler.execute();
+    };
+
+    void knock() {
+        knock_index = 0;
+        t_knock.restart();
+    };
+
+    void setPattern(const String& new_pattern) {
+        pattern = new_pattern;
+    };
+
+    void setVelocity(uint8_t new_velocity) {
+        velocity = new_velocity;
+    };
+
+    void setFinishedCallback(void (*callback)()) {
+        finished = callback;
+    };
+
+private:
+    static void knock_callback() {
+        if (instance->pattern[instance->knock_index] == 'x') {
+            analogWrite(instance->pin, instance->velocity);
+            instance->t_off.restartDelayed();
+            ESP_LOGD(KNOCK_TAG, "Knock %u %u", instance->knock_index, instance->velocity);
+        } else {
+            analogWrite(instance->pin, 0);
+        }
+
+        instance->knock_index++;
+        if (instance->knock_index < instance->pattern.length()) {
+            auto interval = 60000UL / instance->tempo;
+            if (interval < OFF_TIME + 50) {
+                interval = OFF_TIME + 50;
+            }
+            instance->t_knock.restartDelayed(interval);
+        }
+        else {
+            instance->knock_index = 0;
+            instance->t_knock.disable();
+            if (instance->finished) {
+                instance->finished();
+            }
+        }
+    }
+
+    static void off_callback() {
+        analogWrite(instance->pin, 0);
+        ESP_LOGD(KNOCK_TAG, "Knock %u off", instance->knock_index);
+    }
+
+    Scheduler scheduler;
+
+    String pattern { "xxx_" };
+
+    Task t_knock { 300UL, TASK_ONCE, &Knocker::knock_callback, &scheduler, false };
+    Task t_off { OFF_TIME, TASK_ONCE, &Knocker::off_callback, &scheduler, false };
+
+    uint8_t pin;
+    uint16_t tempo;
+
+    uint8_t velocity = 255;
+
+    uint8_t knock_index = 0;
+
+    void (*finished)() = nullptr;
+};
+
+Knocker* Knocker::instance = nullptr;

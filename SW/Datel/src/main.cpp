@@ -1,18 +1,32 @@
 #include <Arduino.h>
+#include <painlessMesh.h>
 
-// put function declarations here:
-int myFunction(int, int);
+#include "Knocker.h"
 
+#ifndef SOL_PIN
+#define SOL_PIN 0
+#endif
+
+const char* TAG = "Datel";
+
+Knocker knocker(SOL_PIN);
+
+// === Function Prototypes ===
+
+// === Setup & Loop ===
 void setup() {
-  // put your setup code here, to run once:
-  int result = myFunction(2, 3);
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
+  static unsigned long lastMillis = 0;
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastMillis >= 5000) {
+      lastMillis = currentMillis;
+      knocker.knock();
+      ESP_LOGI(TAG, "Knock!");
+  }
+
+  knocker.update();
 }
 
-// put function definitions here:
-int myFunction(int x, int y) {
-  return x + y;
-}
+// === Function Definitions ===
