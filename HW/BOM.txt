@@ -1,0 +1,17 @@
+Power supply
+- 1 Li-Ion cell (2500 mAh)
+- 1S BMS
+- Step up converter (12V)
+- JST-PH-2 2mm Female
+
+Solenoid
+- MOSFET driver module - 3.3V -> ~30V
+- flyback diode - 1N5819 / 1N5822
+- 12V Solenoid
+
+ESP32 Dev kit
+- Olimex ESP32-C3-DevKit-Lipo
+
+Mechanical
+- M2 spacers
+- metal strip
