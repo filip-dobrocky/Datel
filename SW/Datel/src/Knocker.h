@@ -4,7 +4,7 @@
 // Use painlessMesh's TaskScheduler
 #include "painlessMesh.h"
 
-#define OFF_TIME 50UL
+#define OFF_TIME 25UL
 
 const char* KNOCK_TAG = "Knocker";
 
@@ -39,12 +39,24 @@ public:
         pattern = new_pattern;
     };
 
+    String getPattern() const {
+        return pattern;
+    };
+
     void setVelocity(uint8_t new_velocity) {
         velocity = new_velocity;
+    };
+    
+    uint8_t getVelocity() const {
+        return velocity;
     };
 
     void setTempo(uint16_t new_tempo) {
         tempo = new_tempo;
+    };
+
+    uint16_t getTempo() const {
+        return tempo;
     };
 
     void setOnFinished(void (*callback)()) {
