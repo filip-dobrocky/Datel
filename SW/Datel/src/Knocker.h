@@ -4,7 +4,7 @@
 // Use painlessMesh's TaskScheduler
 #include "painlessMesh.h"
 
-#define OFF_TIME 100UL
+#define OFF_TIME 50UL
 
 const char* KNOCK_TAG = "Knocker";
 
@@ -16,6 +16,7 @@ public:
     : pin(pin), tempo(tempo)
     {
         pinMode(pin, OUTPUT);
+        analogWriteFrequency(pin, 20000);
 
         scheduler.startNow();
 
@@ -29,6 +30,9 @@ public:
     void knock() {
         knock_index = 0;
         t_knock.restart();
+        if (onStarted) {
+            onStarted();
+        }
     };
 
     void setPattern(const String& new_pattern) {
@@ -39,8 +43,16 @@ public:
         velocity = new_velocity;
     };
 
-    void setFinishedCallback(void (*callback)()) {
-        finished = callback;
+    void setTempo(uint16_t new_tempo) {
+        tempo = new_tempo;
+    };
+
+    void setOnFinished(void (*callback)()) {
+        onFinished = callback;
+    };
+
+    void setOnStarted(void (*callback)()) {
+        onStarted = callback;
     };
 
 private:
@@ -55,7 +67,7 @@ private:
 
         instance->knock_index++;
         if (instance->knock_index < instance->pattern.length()) {
-            auto interval = 60000UL / instance->tempo;
+            auto interval = 15000UL / instance->tempo; // sixteenth note duration in ms
             if (interval < OFF_TIME + 50) {
                 interval = OFF_TIME + 50;
             }
@@ -64,8 +76,8 @@ private:
         else {
             instance->knock_index = 0;
             instance->t_knock.disable();
-            if (instance->finished) {
-                instance->finished();
+            if (instance->onFinished) {
+                instance->onFinished();
             }
         }
     }
@@ -89,7 +101,8 @@ private:
 
     uint8_t knock_index = 0;
 
-    void (*finished)() = nullptr;
+    void (*onStarted)() = nullptr;
+    void (*onFinished)() = nullptr;
 };
 
 Knocker* Knocker::instance = nullptr;
