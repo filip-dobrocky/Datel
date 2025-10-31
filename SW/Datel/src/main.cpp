@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <painlessMesh.h>
+#include <ArduinoJson.h>
 #include "osc_control.h"
 
 #include "Knocker.h"
@@ -19,6 +20,10 @@
 #define OBJ_ID 0
 #endif
 
+#if OBJ_ID == 0
+#define AP_MODE true
+#endif
+
 #ifndef LED_PIN
 #define LED_PIN 8
 #endif
@@ -32,7 +37,7 @@ const char* TAG = "Datel";
 Knocker knocker(SOL_PIN);
 bool knocking = false;
 
-Scheduler scheduler;
+Scheduler userScheduler; // painlessMesh uses this
 
 Mutator mutator(OBJ_ID);
 
@@ -53,6 +58,9 @@ const uint32_t suspend_timeout_short = 2000;
 
 const uint32_t idle_timeout = 45000;
 
+// Check if this node is the root/gateway (connected to external controller)
+bool isRoot = false;
+
 // === Function Prototypes ===
 void suspend(bool state, uint32_t timeout = 0);
 void ping();
@@ -60,43 +68,51 @@ void ping();
 void send_knocking();
 void send_knocked();
 void send_battery();
+void send_suspended();
+void send_ping();
 
-void knocking_received(OSCMessage& m);
-void knocked_received(OSCMessage& m);
-void pause_received(OSCMessage& m);
+void mesh_knocking_received(JsonDocument& doc);
+void mesh_knocked_received(JsonDocument& doc);
+void mesh_pause_received(JsonDocument& doc);
+void mesh_ping_received(JsonDocument& doc, uint32_t from);
+void mesh_suspended_received(JsonDocument& doc, uint32_t from);
+void mesh_battery_received(JsonDocument& doc, uint32_t from);
+
+void osc_pause_received(OSCMessage& m);
 
 void mutate_pattern(const char* pattern, const char* sender_dna);
 
 void measure_battery();
 
+// Mesh callbacks
+void receivedCallback(uint32_t from, String &msg);
+void newConnectionCallback(uint32_t nodeId);
+void changedConnectionCallback();
+void nodeTimeAdjustedCallback(int32_t offset);
+
 // === Tasks ===
 Task t_unsuspend(suspend_timeout_short, TASK_ONCE, []() {
     suspend(false);
-}, &scheduler, false);
+}, &userScheduler, false);
 
 Task t_idle_timeout(idle_timeout, TASK_ONCE, []() {
     knocker.knock();
-}, &scheduler, false);
+}, &userScheduler, false);
 
-Task t_measure_battery(60000, TASK_FOREVER, &measure_battery, &scheduler, false);
+Task t_measure_battery(60000, TASK_FOREVER, &measure_battery, &userScheduler, false);
 
 Task t_low_battery_indication(2000, TASK_FOREVER, []() {
     static bool led_on = false;
     digitalWrite(LED_PIN, led_on ? HIGH : LOW);
     led_on = !led_on;
-}, &scheduler, false);
+}, &userScheduler, false);
 
-Task t_ping(5000, TASK_FOREVER, &ping, &scheduler, true);
+Task t_ping(5000, TASK_FOREVER, &send_ping, &userScheduler, true);
 
-Task t_send_battery(60000, TASK_FOREVER, &send_battery, &scheduler, false);
+Task t_send_battery(60000, TASK_FOREVER, &send_battery, &userScheduler, false);
 
-// === OSC ===
-OSC_receive_msg rcv_knocking("/knocking");
-OSC_receive_msg rcv_knocked("/knocked");
+// === OSC === (only for pause from external controller)
 OSC_receive_msg rcv_pause("/pause");
-
-OSC_send_msg snd_knock("/knocking");
-OSC_send_msg snd_knocked("/knocked");
 
 OSC_send_msg snd_ping("/ping");
 OSC_send_msg snd_suspended("/suspended");
@@ -105,25 +121,55 @@ OSC_send_msg snd_battery("/battery");
 // === Setup & Loop ===
 void setup() {
     pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, HIGH);
 
+    // Initialize painlessMesh
+    mesh.setDebugMsgTypes(ERROR | STARTUP | CONNECTION);
     mesh.init(
         WIFI_SSID, WIFI_PASS,
+        &userScheduler,
         MESH_PORT,
-        #if STATION_ONLY 
+#if STATION_ONLY 
         WIFI_STA,
-        #else
+#else
+#if AP_MODE
+        WIFI_AP,
+#else
         WIFI_AP_STA,
-        #endif
+#endif
+#endif
         MESH_CHANNEL,
         0, MAX_CONN
     );
     
-    udp.begin(OSC_REC_PORT);
+    // Set mesh callbacks
+    mesh.onReceive(&receivedCallback);
+    mesh.onNewConnection(&newConnectionCallback);
+    mesh.onChangedConnections(&changedConnectionCallback);
+    mesh.onNodeTimeAdjusted(&nodeTimeAdjustedCallback);
     
-    scheduler.startNow();
+    // Determine if this is the root node based on OBJ_ID
+    // Root node (ID 0) connects to external OSC controller
+    isRoot = (OBJ_ID == 0);
     
+    if (isRoot) {
+        mesh.setRoot(true);
+        ESP_LOGI(TAG, "Running as ROOT/GATEWAY node (OBJ_ID=%d)", OBJ_ID);
+        // Start UDP for OSC communication with external controller
+        udp.begin(OSC_REC_PORT);
+        rcv_pause.init(osc_pause_received);
+        
+        // Initialize OSC send messages
+        snd_ping.init(info_address);
+        snd_suspended.init(info_address);
+        snd_battery.init(info_address);
+    } else {
+        mesh.setContainsRoot(true);  // Tell this node the mesh contains a root
+        ESP_LOGI(TAG, "Running as MESH node (OBJ_ID=%d)", OBJ_ID);
+    }
+
     // === Knocker ===
-    knocker.setTempo(400);
+    knocker.setTempo(360);
     // knocker.setPattern("x_xx_x_x____x___");
     knocker.setPattern("xxxxxxxx__xx___xxxx__xx__xxx_____xxxx______");
     
@@ -146,21 +192,19 @@ void setup() {
         knocking = false;
     });
     
-    // === OSC ===
-    rcv_knocking.init(knocking_received);
-    rcv_knocked.init(knocked_received);
-    rcv_pause.init(pause_received);
+    // Add tasks to scheduler
+    userScheduler.addTask(t_unsuspend);
+    userScheduler.addTask(t_idle_timeout);
+    userScheduler.addTask(t_measure_battery);
+    userScheduler.addTask(t_low_battery_indication);
+    userScheduler.addTask(t_ping);
+    userScheduler.addTask(t_send_battery);
     
-    snd_knock.init(base_address);
-    snd_knocked.init(base_address);
-    
-    snd_ping.init(info_address);
-    snd_suspended.init(info_address);
-    snd_battery.init(info_address);
-
     t_idle_timeout.restartDelayed(10000UL);
     t_measure_battery.restartDelayed(15000UL);
     t_send_battery.restartDelayed(20000UL);
+    
+    ESP_LOGI(TAG, "Node ID: %u, OBJ_ID: %d, isRoot: %d", mesh.getNodeId(), OBJ_ID, isRoot);
 }
 
 void loop() {  
@@ -181,14 +225,273 @@ void loop() {
     }
     #endif
     
-    mesh.update();
+    mesh.update();  // This calls userScheduler.execute() internally
     knocker.update();
-    scheduler.execute();
 
-    osc_control_loop(udp, base_address, info_address);
+    // OSC handling for root node
+    if (isRoot) {
+        osc_control_loop(udp, base_address, info_address);
+    }
 }
 
 // === Function Definitions ===
+
+// === Mesh Message Handlers ===
+void receivedCallback(uint32_t from, String &msg) {
+    ESP_LOGD(TAG, "Received from %u: %s", from, msg.c_str());
+    
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, msg);
+    
+    if (error) {
+        ESP_LOGE(TAG, "JSON parse error: %s", error.c_str());
+        return;
+    }
+    
+    const char* type = doc["type"];
+    if (!type) {
+        ESP_LOGE(TAG, "No message type");
+        return;
+    }
+    
+    // Route messages based on type
+    if (strcmp(type, "knocking") == 0) {
+        mesh_knocking_received(doc);
+    } else if (strcmp(type, "knocked") == 0) {
+        mesh_knocked_received(doc);
+    } else if (strcmp(type, "pause") == 0) {
+        mesh_pause_received(doc);
+    } else if (strcmp(type, "ping") == 0) {
+        mesh_ping_received(doc, from);
+    } else if (strcmp(type, "suspended") == 0) {
+        mesh_suspended_received(doc, from);
+    } else if (strcmp(type, "battery") == 0) {
+        mesh_battery_received(doc, from);
+    } else {
+        ESP_LOGW(TAG, "Unknown message type: %s", type);
+    }
+}
+
+void newConnectionCallback(uint32_t nodeId) {
+    ESP_LOGI(TAG, "New Connection, nodeId = %u", nodeId);
+}
+
+void changedConnectionCallback() {
+    ESP_LOGI(TAG, "Changed connections");
+    auto nodes = mesh.getNodeList();
+    ESP_LOGI(TAG, "Num nodes: %d", nodes.size());
+}
+
+void nodeTimeAdjustedCallback(int32_t offset) {
+    ESP_LOGD(TAG, "Adjusted time %u. Offset = %d", mesh.getNodeTime(), offset);
+}
+
+// === Send Functions (Mesh) ===
+void send_knocking() {
+    JsonDocument doc;
+    doc["type"] = "knocking";
+    doc["id"] = OBJ_ID;
+    doc["pattern"] = knocker.getPattern();
+    doc["dna"] = mutator.get_dna();
+    doc["tempo"] = knocker.getTempo();
+    
+    String msg;
+    serializeJson(doc, msg);
+    mesh.sendBroadcast(msg);
+    ESP_LOGD(TAG, "Sent knocking via mesh (tempo: %d)", knocker.getTempo());
+}
+
+void send_knocked() {
+    JsonDocument doc;
+    doc["type"] = "knocked";
+    doc["id"] = OBJ_ID;
+    
+    String msg;
+    serializeJson(doc, msg);
+    mesh.sendBroadcast(msg);
+    ESP_LOGD(TAG, "Sent knocked via mesh");
+}
+
+void send_ping() {
+    JsonDocument doc;
+    doc["type"] = "ping";
+    doc["id"] = OBJ_ID;
+    
+    String msg;
+    serializeJson(doc, msg);
+    
+    // Non-root nodes send to mesh (to reach root)
+    if (!isRoot) {
+        mesh.sendBroadcast(msg);
+        ESP_LOGD(TAG, "Sent ping via mesh");
+    } else {
+        // Root node sends directly via OSC
+        snd_ping.m.add((int)OBJ_ID);
+        snd_ping.send(udp, IPAddress(255, 255, 255, 255), OSC_SND_PORT);
+        ESP_LOGD(TAG, "Sent ping via OSC");
+    }
+}
+
+void send_battery() {
+    JsonDocument doc;
+    doc["type"] = "battery";
+    doc["id"] = OBJ_ID;
+    doc["voltage"] = battery_voltage;
+    
+    String msg;
+    serializeJson(doc, msg);
+    
+    // Non-root nodes send to mesh (to reach root)
+    if (!isRoot) {
+        mesh.sendBroadcast(msg);
+        ESP_LOGD(TAG, "Sent battery via mesh: %.2f V", battery_voltage);
+    } else {
+        // Root node sends directly via OSC
+        snd_battery.m.add((int)OBJ_ID);
+        snd_battery.m.add(battery_voltage);
+        snd_battery.send(udp, IPAddress(255, 255, 255, 255), OSC_SND_PORT);
+        ESP_LOGD(TAG, "Sent battery via OSC: %.2f V", battery_voltage);
+    }
+}
+
+void send_suspended() {
+    JsonDocument doc;
+    doc["type"] = "suspended";
+    doc["id"] = OBJ_ID;
+    doc["state"] = (int)suspended;
+    
+    String msg;
+    serializeJson(doc, msg);
+    
+    // Non-root nodes send to mesh (to reach root)
+    if (!isRoot) {
+        mesh.sendBroadcast(msg);
+        ESP_LOGD(TAG, "Sent suspended via mesh");
+    } else {
+        // Root node sends directly via OSC
+        snd_suspended.m.add((int)OBJ_ID);
+        snd_suspended.m.add((int)suspended);
+        snd_suspended.send(udp, IPAddress(255, 255, 255, 255), OSC_SND_PORT);
+        ESP_LOGD(TAG, "Sent suspended via OSC");
+    }
+}
+
+// === Receive Functions (Mesh) ===
+void mesh_knocking_received(JsonDocument& doc) {
+    int obj_id = doc["id"] | -1;
+    ESP_LOGD(TAG, "Mesh knocking received from obj_id: %d", obj_id);
+    
+    const char* pattern = doc["pattern"];
+    const char* sender_dna = doc["dna"];
+    int sender_tempo = doc["tempo"] | 400;  // Default to 400 if not present
+    
+    if (pattern && sender_dna) {
+        ESP_LOGD(TAG, "Pattern: %s, DNA: %s, Tempo: %d", pattern, sender_dna, sender_tempo);
+        mutate_pattern(pattern, sender_dna);
+        
+        // Randomly adjust tempo by ±1 to ±10
+        int tempo_change = random(1, 11);  // 1-10
+        if (random(0, 2) == 0) {
+            tempo_change = -tempo_change;  // 50% chance to decrease
+        }
+        
+        int new_tempo = sender_tempo + tempo_change;
+        
+        // Clamp tempo between 120 and 400
+        if (new_tempo < 120) {
+            new_tempo = 120;
+        } else if (new_tempo > 400) {
+            new_tempo = 400;
+        }
+        
+        knocker.setTempo(new_tempo);
+        ESP_LOGI(TAG, "Tempo adjusted: %d -> %d (change: %+d)", sender_tempo, new_tempo, tempo_change);
+    }
+    
+    suspend(true, suspend_timeout_short);
+}
+
+void mesh_knocked_received(JsonDocument& doc) {
+    int obj_id = doc["id"] | -1;
+    ESP_LOGD(TAG, "Mesh knocked received from obj_id: %d", obj_id);
+    
+    if (!suspended && !paused) {
+        knocker.knock();
+    }
+}
+
+void mesh_pause_received(JsonDocument& doc) {
+    int pause_state = doc["state"] | 0;
+    paused = (pause_state != 0);
+    ESP_LOGI(TAG, "Mesh pause received: %u", paused);
+
+    if (paused) {
+        t_idle_timeout.disable();
+    } else {
+        t_idle_timeout.restartDelayed(10000UL);
+    }
+}
+
+void mesh_ping_received(JsonDocument& doc, uint32_t from) {
+    if (isRoot) {
+        // Forward to OSC controller
+        int obj_id = doc["id"] | -1;
+        snd_ping.m.add(obj_id);
+        snd_ping.send(udp, IPAddress(255, 255, 255, 255), OSC_SND_PORT);
+        ESP_LOGD(TAG, "Forwarded ping from node %u (obj_id %d) to OSC", from, obj_id);
+    }
+}
+
+void mesh_suspended_received(JsonDocument& doc, uint32_t from) {
+    if (isRoot) {
+        // Forward to OSC controller
+        int obj_id = doc["id"] | -1;
+        int state = doc["state"] | 0;
+        snd_suspended.m.add(obj_id);
+        snd_suspended.m.add(state);
+        snd_suspended.send(udp, IPAddress(255, 255, 255, 255), OSC_SND_PORT);
+        ESP_LOGD(TAG, "Forwarded suspended from node %u (obj_id %d) to OSC", from, obj_id);
+    }
+}
+
+void mesh_battery_received(JsonDocument& doc, uint32_t from) {
+    if (isRoot) {
+        // Forward to OSC controller
+        int obj_id = doc["id"] | -1;
+        float voltage = doc["voltage"] | 0.0f;
+        snd_battery.m.add(obj_id);
+        snd_battery.m.add(voltage);
+        snd_battery.send(udp, IPAddress(255, 255, 255, 255), OSC_SND_PORT);
+        ESP_LOGD(TAG, "Forwarded battery from node %u (obj_id %d, %.2fV) to OSC", from, obj_id, voltage);
+    }
+}
+
+// === OSC Receive (Root node only) ===
+void osc_pause_received(OSCMessage& m) {
+    ESP_LOGD(TAG, "OSC pause received");
+    
+    if (m.size() > 0) {
+        int pause_state = m.getInt(0);
+        paused = (pause_state != 0);
+        ESP_LOGI(TAG, "Paused: %u", paused);
+
+        // Broadcast pause to all mesh nodes
+        JsonDocument doc;
+        doc["type"] = "pause";
+        doc["state"] = pause_state;
+        
+        String msg;
+        serializeJson(doc, msg);
+        mesh.sendBroadcast(msg);
+        ESP_LOGD(TAG, "Broadcasted pause to mesh");
+
+        if (paused) {
+            t_idle_timeout.disable();
+        } else {
+            t_idle_timeout.restartDelayed(10000UL);
+        }
+    }
+}
 
 void suspend(bool state, uint32_t timeout) {
     if (suspended != state) {
@@ -198,90 +501,9 @@ void suspend(bool state, uint32_t timeout) {
             t_unsuspend.restartDelayed(timeout);
         }
         
-        snd_suspended.m.add((int)OBJ_ID);
-        snd_suspended.m.add((int)suspended);
-        snd_suspended.send(udp, IPAddress(255, 255, 255, 255), OSC_SND_PORT);
+        send_suspended();
         ESP_LOGI(TAG, "Suspended: %u", suspended);
     }
-}
-
-void ping() {
-    ESP_LOGD(TAG, "Ping broadcast");
-    
-    snd_ping.m.add((int)OBJ_ID);
-    snd_ping.send(udp, IPAddress(255, 255, 255, 255), OSC_SND_PORT);
-}
-
-void knocking_received(OSCMessage& m) {
-    ESP_LOGD(TAG, "Knocking received");
-    
-    if (m.size() > 0) {
-        int obj_id = m.getInt(0);
-        ESP_LOGD(TAG, "Object ID: %d", obj_id);
-    }
-    
-    if (m.size() > 2) {
-        char pattern[MAX_PATTERN_LEN];
-        m.getString(1, pattern, MAX_PATTERN_LEN);
-        ESP_LOGD(TAG, "Pattern: %s", pattern);
-        
-        char sender_dna[MAX_DNA_LEN];
-        m.getString(2, sender_dna, MAX_DNA_LEN);
-        mutate_pattern(pattern, sender_dna);
-    }
-    
-    suspend(true, suspend_timeout_short);
-}
-
-void knocked_received(OSCMessage& m) {
-    ESP_LOGD(TAG, "Knocked received");
-    
-    if (m.size() > 0) {
-        int obj_id = m.getInt(0);
-        ESP_LOGD(TAG, "Object ID: %d", obj_id);
-    }
-    
-    if (!suspended && !paused) {
-        knocker.knock();
-    }
-}
-
-void pause_received(OSCMessage& m) {
-    ESP_LOGD(TAG, "Pause received");
-    
-    if (m.size() > 0) {
-        int pause_state = m.getInt(0);
-        paused = (pause_state != 0);
-        ESP_LOGI(TAG, "Paused: %u", paused);
-
-        if (paused) {
-            t_idle_timeout.disable();
-        }
-        else {
-            t_idle_timeout.restartDelayed(10000UL);
-        }
-    }
-}
-
-void send_knocking() {
-    snd_knock.m.add((int)OBJ_ID);
-    snd_knock.m.add(knocker.getPattern().c_str());
-    snd_knock.m.add(mutator.get_dna());
-    snd_knock.send(udp, IPAddress(255, 255, 255, 255), OSC_REC_PORT);
-    ESP_LOGD(TAG, "Sent knocking");
-}
-
-void send_knocked() {
-    snd_knocked.m.add((int)OBJ_ID);
-    snd_knocked.send(udp, IPAddress(255, 255, 255, 255), OSC_REC_PORT);
-    ESP_LOGD(TAG, "Sent knocked");
-}
-
-void send_battery() {
-    snd_battery.m.add((int)OBJ_ID);
-    snd_battery.m.add(battery_voltage);
-    snd_battery.send(udp, IPAddress(255, 255, 255, 255), OSC_SND_PORT);
-    ESP_LOGD(TAG, "Sent battery: %.2f V", battery_voltage);
 }
 
 void mutate_pattern(const char* pattern, const char* sender_dna) {
