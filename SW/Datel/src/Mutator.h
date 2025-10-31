@@ -65,7 +65,8 @@ public:
       output_pattern[i] = buffer[i];
     }
     output_pattern[buf_len] = '\0';
-    chaos += 0.025f;
+    chaos += 0.05f;
+    if (chaos > 1.0f) chaos = 1.0f;
   }
 
   char* get_dna() {
