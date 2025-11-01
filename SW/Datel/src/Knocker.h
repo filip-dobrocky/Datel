@@ -29,6 +29,7 @@ public:
 
     void knock() {
         knock_index = 0;
+        current_velocity = velocity;  // Reset to full velocity at start
         t_knock.restart();
         if (onStarted) {
             onStarted();
@@ -70,9 +71,16 @@ public:
 private:
     static void knock_callback() {
         if (instance->pattern[instance->knock_index] == 'x') {
-            analogWrite(instance->pin, instance->velocity);
+            analogWrite(instance->pin, instance->current_velocity);
             instance->t_off.restartDelayed();
-            ESP_LOGD(KNOCK_TAG, "Knock %u %u", instance->knock_index, instance->velocity);
+            ESP_LOGD(KNOCK_TAG, "Knock %u vel=%u", instance->knock_index, instance->current_velocity);
+            
+            // Decrease velocity for next knock (decay effect)
+            if (instance->current_velocity > 2) {
+                instance->current_velocity -= 2;
+            } else {
+                instance->current_velocity = 0;
+            }
         } else {
             analogWrite(instance->pin, 0);
         }
@@ -110,6 +118,7 @@ private:
     uint16_t tempo;
 
     uint8_t velocity = 255;
+    uint8_t current_velocity = 255;  // Working velocity that decays during knock sequence
 
     uint8_t knock_index = 0;
 
