@@ -44,11 +44,7 @@ Mutator mutator(OBJ_ID);
 painlessMesh mesh;
 WiFiUDP udp;
 
-// OSC addressing:
-// base_address is the device-specific address prefix (e.g., "/datel/0")
-// broadcast_address allows commands to target all devices (e.g., "/datel")
-char base_address[OSC_MAX_ADDRESS_SIZE] = {0};
-const char *broadcast_address = "/datel";
+const char *base_address = "/datel";
 const char *info_address = "/info";
 
 bool suspended = false;
@@ -74,6 +70,7 @@ void send_knocked();
 void send_battery();
 void send_suspended();
 void send_ping();
+void send_velocity(float norm_value);
 
 void mesh_knocking_received(JsonDocument& doc);
 void mesh_knocked_received(JsonDocument& doc);
@@ -81,8 +78,10 @@ void mesh_pause_received(JsonDocument& doc);
 void mesh_ping_received(JsonDocument& doc, uint32_t from);
 void mesh_suspended_received(JsonDocument& doc, uint32_t from);
 void mesh_battery_received(JsonDocument& doc, uint32_t from);
+void mesh_velocity_received(JsonDocument& doc);
 
 void osc_pause_received(OSCMessage& m);
+void osc_velocity_received(OSCMessage& m);
 
 void mutate_pattern(const char* pattern, const char* sender_dna);
 
@@ -117,6 +116,7 @@ Task t_send_battery(60000, TASK_FOREVER, &send_battery, &userScheduler, false);
 
 // === OSC === (only for pause from external controller)
 OSC_receive_msg rcv_pause("/pause");
+OSC_receive_msg rcv_velocity("/velocity");
 
 OSC_send_msg snd_ping("/ping");
 OSC_send_msg snd_suspended("/suspended");
@@ -159,6 +159,7 @@ void setup() {
     // All nodes start UDP for OSC (so external device can connect to any node)
     udp.begin(OSC_REC_PORT);
     rcv_pause.init(osc_pause_received);
+    rcv_velocity.init(osc_velocity_received);
     
     // Initialize OSC send messages on all nodes (any node might need to send to controller)
     snd_ping.init(info_address);
@@ -172,11 +173,6 @@ void setup() {
         mesh.setContainsRoot(true);  // Tell this node the mesh contains a root
         ESP_LOGI(TAG, "Running as MESH node (OBJ_ID=%d) - OSC enabled", OBJ_ID);
     }
-
-    // Build device-specific OSC base address: "/datel/<OBJ_ID>"
-    // This aligns with osc_control's expected addressing scheme
-    snprintf(base_address, sizeof(base_address), "/datel/%d", OBJ_ID);
-    ESP_LOGI(TAG, "OSC base address: %s (broadcast: %s)", base_address, broadcast_address);
 
     // === Knocker ===
     knocker.setTempo(300);
@@ -238,8 +234,8 @@ void loop() {
     mesh.update();  // This calls userScheduler.execute() internally
     knocker.update();
 
-    // All nodes handle OSC: match either targeted (base_address) or broadcast (broadcast_address)
-    osc_control_loop(udp, base_address, broadcast_address);
+    // All nodes handle OSC (so external device can connect to any node)
+    osc_control_loop(udp, base_address, info_address);
 }
 
 // === Function Definitions ===
@@ -275,6 +271,8 @@ void receivedCallback(uint32_t from, String &msg) {
         mesh_suspended_received(doc, from);
     } else if (strcmp(type, "battery") == 0) {
         mesh_battery_received(doc, from);
+    } else if (strcmp(type, "velocity") == 0) {
+        mesh_velocity_received(doc);
     } else {
         ESP_LOGW(TAG, "Unknown message type: %s", type);
     }
@@ -481,6 +479,16 @@ void mesh_battery_received(JsonDocument& doc, uint32_t from) {
     }
 }
 
+void mesh_velocity_received(JsonDocument& doc) {
+    // Normalize and map to 0..255
+    float norm = doc["value"] | 0.0f;
+    if (norm < 0.0f) norm = 0.0f;
+    if (norm > 1.0f) norm = 1.0f;
+    uint8_t vel = (uint8_t)roundf(norm * 255.0f);
+    knocker.setVelocity(vel);
+    ESP_LOGI(TAG, "Mesh velocity received: norm=%.3f -> %u", norm, vel);
+}
+
 // === OSC Receive (Any node can receive, will broadcast to mesh) ===
 void osc_pause_received(OSCMessage& m) {
     ESP_LOGI(TAG, "OSC pause received on node (OBJ_ID=%d, isRoot=%d)", OBJ_ID, isRoot);
@@ -506,6 +514,53 @@ void osc_pause_received(OSCMessage& m) {
             t_idle_timeout.restartDelayed(10000UL);
         }
     }
+}
+
+void osc_velocity_received(OSCMessage& m) {
+    ESP_LOGI(TAG, "OSC velocity received on node (OBJ_ID=%d)", OBJ_ID);
+    if (m.size() > 0) {
+        float norm = 0.0f;
+        // Accept float or int
+        #ifdef OSCMessage_h
+        #endif
+        // CNMAT OSCMessage supports getFloat/getInt
+        // Try to read as float first
+        norm = m.getFloat(0);
+        // If the sender used int, map accordingly (0..1 or 0..255)
+        if (isnan(norm)) {
+            int v = m.getInt(0);
+            if (v > 1) {
+                norm = constrain((float)v / 255.0f, 0.0f, 1.0f);
+            } else {
+                norm = constrain((float)v, 0.0f, 1.0f);
+            }
+        }
+
+        if (norm < 0.0f) norm = 0.0f;
+        if (norm > 1.0f) norm = 1.0f;
+        uint8_t vel = (uint8_t)roundf(norm * 255.0f);
+        knocker.setVelocity(vel);
+        ESP_LOGI(TAG, "Set velocity from OSC: norm=%.3f -> %u", norm, vel);
+
+        // Distribute to mesh so all nodes update
+        send_velocity(norm);
+    }
+}
+
+void send_velocity(float norm_value) {
+    // Clamp
+    if (norm_value < 0.0f) norm_value = 0.0f;
+    if (norm_value > 1.0f) norm_value = 1.0f;
+
+    JsonDocument doc;
+    doc["type"] = "velocity";
+    doc["id"] = OBJ_ID;
+    doc["value"] = norm_value;
+
+    String msg;
+    serializeJson(doc, msg);
+    mesh.sendBroadcast(msg);
+    ESP_LOGD(TAG, "Sent velocity via mesh: norm=%.3f", norm_value);
 }
 
 void suspend(bool state, uint32_t timeout) {
