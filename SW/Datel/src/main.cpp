@@ -44,7 +44,11 @@ Mutator mutator(OBJ_ID);
 painlessMesh mesh;
 WiFiUDP udp;
 
-const char *base_address = "/datel";
+// OSC addressing:
+// base_address is the device-specific address prefix (e.g., "/datel/0")
+// broadcast_address allows commands to target all devices (e.g., "/datel")
+char base_address[OSC_MAX_ADDRESS_SIZE] = {0};
+const char *broadcast_address = "/datel";
 const char *info_address = "/info";
 
 bool suspended = false;
@@ -139,7 +143,7 @@ void setup() {
 #endif
 #endif
         MESH_CHANNEL,
-        0, MAX_CONN
+    (OBJ_ID == 0 ? 0 : 1), MAX_CONN
     );
     
     // Set mesh callbacks
@@ -152,26 +156,32 @@ void setup() {
     // Root node (ID 0) connects to external OSC controller
     isRoot = (OBJ_ID == 0);
     
+    // All nodes start UDP for OSC (so external device can connect to any node)
+    udp.begin(OSC_REC_PORT);
+    rcv_pause.init(osc_pause_received);
+    
+    // Initialize OSC send messages on all nodes (any node might need to send to controller)
+    snd_ping.init(info_address);
+    snd_suspended.init(info_address);
+    snd_battery.init(info_address);
+    
     if (isRoot) {
         mesh.setRoot(true);
         ESP_LOGI(TAG, "Running as ROOT/GATEWAY node (OBJ_ID=%d)", OBJ_ID);
-        // Start UDP for OSC communication with external controller
-        udp.begin(OSC_REC_PORT);
-        rcv_pause.init(osc_pause_received);
-        
-        // Initialize OSC send messages
-        snd_ping.init(info_address);
-        snd_suspended.init(info_address);
-        snd_battery.init(info_address);
     } else {
         mesh.setContainsRoot(true);  // Tell this node the mesh contains a root
-        ESP_LOGI(TAG, "Running as MESH node (OBJ_ID=%d)", OBJ_ID);
+        ESP_LOGI(TAG, "Running as MESH node (OBJ_ID=%d) - OSC enabled", OBJ_ID);
     }
 
+    // Build device-specific OSC base address: "/datel/<OBJ_ID>"
+    // This aligns with osc_control's expected addressing scheme
+    snprintf(base_address, sizeof(base_address), "/datel/%d", OBJ_ID);
+    ESP_LOGI(TAG, "OSC base address: %s (broadcast: %s)", base_address, broadcast_address);
+
     // === Knocker ===
-    knocker.setTempo(360);
-    // knocker.setPattern("x_xx_x_x____x___");
-    knocker.setPattern("xxxxxxxx__xx___xxxx__xx__xxx_____xxxx______");
+    knocker.setTempo(300);
+    knocker.setPattern("xxxx____xxx___x___");
+    //knocker.setPattern("xxxxxxxx__xx___xxxx__xx__xxx_____xxxx______");
     
     knocker.setOnStarted([]() {
         ESP_LOGI(TAG, "Knocking started");
@@ -228,10 +238,8 @@ void loop() {
     mesh.update();  // This calls userScheduler.execute() internally
     knocker.update();
 
-    // OSC handling for root node
-    if (isRoot) {
-        osc_control_loop(udp, base_address, info_address);
-    }
+    // All nodes handle OSC: match either targeted (base_address) or broadcast (broadcast_address)
+    osc_control_loop(udp, base_address, broadcast_address);
 }
 
 // === Function Definitions ===
@@ -319,16 +327,17 @@ void send_ping() {
     
     String msg;
     serializeJson(doc, msg);
-    
-    // Non-root nodes send to mesh (to reach root)
-    if (!isRoot) {
-        mesh.sendBroadcast(msg);
-        ESP_LOGD(TAG, "Sent ping via mesh");
-    } else {
-        // Root node sends directly via OSC
+
+    // Always send to mesh
+    mesh.sendBroadcast(msg);
+
+    // Only root sends directly via OSC to the controller
+    if (isRoot) {
         snd_ping.m.add((int)OBJ_ID);
         snd_ping.send(udp, IPAddress(255, 255, 255, 255), OSC_SND_PORT);
-        ESP_LOGD(TAG, "Sent ping via OSC");
+        ESP_LOGD(TAG, "Sent ping via OSC (root)");
+    } else {
+        ESP_LOGD(TAG, "Sent ping via mesh (non-root)");
     }
 }
 
@@ -340,17 +349,18 @@ void send_battery() {
     
     String msg;
     serializeJson(doc, msg);
-    
-    // Non-root nodes send to mesh (to reach root)
-    if (!isRoot) {
-        mesh.sendBroadcast(msg);
-        ESP_LOGD(TAG, "Sent battery via mesh: %.2f V", battery_voltage);
-    } else {
-        // Root node sends directly via OSC
+
+    // Always send to mesh
+    mesh.sendBroadcast(msg);
+
+    // Only root sends directly via OSC to the controller
+    if (isRoot) {
         snd_battery.m.add((int)OBJ_ID);
         snd_battery.m.add(battery_voltage);
         snd_battery.send(udp, IPAddress(255, 255, 255, 255), OSC_SND_PORT);
-        ESP_LOGD(TAG, "Sent battery via OSC: %.2f V", battery_voltage);
+        ESP_LOGD(TAG, "Sent battery via OSC (root): %.2f V", battery_voltage);
+    } else {
+        ESP_LOGD(TAG, "Sent battery via mesh (non-root): %.2f V", battery_voltage);
     }
 }
 
@@ -362,17 +372,18 @@ void send_suspended() {
     
     String msg;
     serializeJson(doc, msg);
-    
-    // Non-root nodes send to mesh (to reach root)
-    if (!isRoot) {
-        mesh.sendBroadcast(msg);
-        ESP_LOGD(TAG, "Sent suspended via mesh");
-    } else {
-        // Root node sends directly via OSC
+
+    // Always send to mesh
+    mesh.sendBroadcast(msg);
+
+    // Only root sends directly via OSC to the controller
+    if (isRoot) {
         snd_suspended.m.add((int)OBJ_ID);
         snd_suspended.m.add((int)suspended);
         snd_suspended.send(udp, IPAddress(255, 255, 255, 255), OSC_SND_PORT);
-        ESP_LOGD(TAG, "Sent suspended via OSC");
+        ESP_LOGD(TAG, "Sent suspended via OSC (root)");
+    } else {
+        ESP_LOGD(TAG, "Sent suspended via mesh (non-root)");
     }
 }
 
@@ -388,9 +399,9 @@ void mesh_knocking_received(JsonDocument& doc) {
     if (pattern && sender_dna) {
         ESP_LOGD(TAG, "Pattern: %s, DNA: %s, Tempo: %d", pattern, sender_dna, sender_tempo);
         mutate_pattern(pattern, sender_dna);
-        
-        // Randomly adjust tempo by ±1 to ±10
-        int tempo_change = random(1, 11);  // 1-10
+
+        // Randomly adjust tempo by ±10 to ±50
+        int tempo_change = random(1, 6) * 10;  // 10, 20, 30, 40, 50
         if (random(0, 2) == 0) {
             tempo_change = -tempo_change;  // 50% chance to decrease
         }
@@ -433,49 +444,53 @@ void mesh_pause_received(JsonDocument& doc) {
 }
 
 void mesh_ping_received(JsonDocument& doc, uint32_t from) {
+    int obj_id = doc["id"] | -1;
     if (isRoot) {
         // Forward to OSC controller
-        int obj_id = doc["id"] | -1;
         snd_ping.m.add(obj_id);
         snd_ping.send(udp, IPAddress(255, 255, 255, 255), OSC_SND_PORT);
         ESP_LOGD(TAG, "Forwarded ping from node %u (obj_id %d) to OSC", from, obj_id);
+    } else {
+        ESP_LOGD(TAG, "Mesh ping received (non-root) from %u (obj_id %d)", from, obj_id);
     }
 }
 
 void mesh_suspended_received(JsonDocument& doc, uint32_t from) {
+    int obj_id = doc["id"] | -1;
+    int state = doc["state"] | 0;
     if (isRoot) {
-        // Forward to OSC controller
-        int obj_id = doc["id"] | -1;
-        int state = doc["state"] | 0;
         snd_suspended.m.add(obj_id);
         snd_suspended.m.add(state);
         snd_suspended.send(udp, IPAddress(255, 255, 255, 255), OSC_SND_PORT);
         ESP_LOGD(TAG, "Forwarded suspended from node %u (obj_id %d) to OSC", from, obj_id);
+    } else {
+        ESP_LOGD(TAG, "Mesh suspended received (non-root) from %u (obj_id %d, state %d)", from, obj_id, state);
     }
 }
 
 void mesh_battery_received(JsonDocument& doc, uint32_t from) {
+    int obj_id = doc["id"] | -1;
+    float voltage = doc["voltage"] | 0.0f;
     if (isRoot) {
-        // Forward to OSC controller
-        int obj_id = doc["id"] | -1;
-        float voltage = doc["voltage"] | 0.0f;
         snd_battery.m.add(obj_id);
         snd_battery.m.add(voltage);
         snd_battery.send(udp, IPAddress(255, 255, 255, 255), OSC_SND_PORT);
         ESP_LOGD(TAG, "Forwarded battery from node %u (obj_id %d, %.2fV) to OSC", from, obj_id, voltage);
+    } else {
+        ESP_LOGD(TAG, "Mesh battery received (non-root) from node %u (obj_id %d, %.2fV)", from, obj_id, voltage);
     }
 }
 
-// === OSC Receive (Root node only) ===
+// === OSC Receive (Any node can receive, will broadcast to mesh) ===
 void osc_pause_received(OSCMessage& m) {
-    ESP_LOGD(TAG, "OSC pause received");
+    ESP_LOGI(TAG, "OSC pause received on node (OBJ_ID=%d, isRoot=%d)", OBJ_ID, isRoot);
     
     if (m.size() > 0) {
         int pause_state = m.getInt(0);
         paused = (pause_state != 0);
-        ESP_LOGI(TAG, "Paused: %u", paused);
+        ESP_LOGI(TAG, "Paused: %u - broadcasting to mesh", paused);
 
-        // Broadcast pause to all mesh nodes
+        // Broadcast pause to all mesh nodes (regardless of which node received OSC)
         JsonDocument doc;
         doc["type"] = "pause";
         doc["state"] = pause_state;
