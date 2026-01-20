@@ -53,10 +53,10 @@ bool paused = false;
 
 float battery_voltage = 0.0f;
 
-const uint32_t suspend_timeout_long = 15000;
+const uint32_t suspend_timeout_long = 12000;
 const uint32_t suspend_timeout_short = 2000;
 
-const uint32_t idle_timeout = 45000;
+const uint32_t idle_timeout = 35000;
 
 // Check if this node is the root/gateway (connected to external controller)
 bool isRoot = false;
@@ -74,6 +74,8 @@ void send_velocity(float norm_value);
 
 void mesh_knocking_received(JsonDocument& doc);
 void mesh_knocked_received(JsonDocument& doc);
+void mesh_tweeting_received(JsonDocument& doc);
+void mesh_tweeted_received(JsonDocument& doc);
 void mesh_pause_received(JsonDocument& doc);
 void mesh_ping_received(JsonDocument& doc, uint32_t from);
 void mesh_suspended_received(JsonDocument& doc, uint32_t from);
@@ -135,12 +137,10 @@ void setup() {
         MESH_PORT,
 #if STATION_ONLY 
         WIFI_STA,
-#else
-#if AP_MODE
+#elif AP_MODE
         WIFI_AP,
 #else
         WIFI_AP_STA,
-#endif
 #endif
         MESH_CHANNEL,
     (OBJ_ID == 0 ? 0 : 1), MAX_CONN
@@ -154,7 +154,11 @@ void setup() {
     
     // Determine if this is the root node based on OBJ_ID
     // Root node (ID 0) connects to external OSC controller
+#ifndef IS_ROOT
     isRoot = (OBJ_ID == 0);
+#else
+    isRoot = IS_ROOT;
+#endif
     
     // All nodes start UDP for OSC (so external device can connect to any node)
     udp.begin(OSC_REC_PORT);
@@ -263,6 +267,10 @@ void receivedCallback(uint32_t from, String &msg) {
         mesh_knocking_received(doc);
     } else if (strcmp(type, "knocked") == 0) {
         mesh_knocked_received(doc);
+    } else if (strcmp(type, "tweeting") == 0) {
+        mesh_tweeting_received(doc);
+    } else if (strcmp(type, "tweeted") == 0) {
+        mesh_tweeted_received(doc);
     } else if (strcmp(type, "pause") == 0) {
         mesh_pause_received(doc);
     } else if (strcmp(type, "ping") == 0) {
@@ -398,19 +406,19 @@ void mesh_knocking_received(JsonDocument& doc) {
         ESP_LOGD(TAG, "Pattern: %s, DNA: %s, Tempo: %d", pattern, sender_dna, sender_tempo);
         mutate_pattern(pattern, sender_dna);
 
-        // Randomly adjust tempo by ±10 to ±50
-        int tempo_change = random(1, 6) * 10;  // 10, 20, 30, 40, 50
+        // Randomly adjust tempo by ±10 to ±80
+        int tempo_change = random(1, 9) * 10;  // 10, 20, 30, 40, 50, 60, 70, 80
         if (random(0, 2) == 0) {
             tempo_change = -tempo_change;  // 50% chance to decrease
         }
         
         int new_tempo = sender_tempo + tempo_change;
         
-        // Clamp tempo between 120 and 400
-        if (new_tempo < 120) {
-            new_tempo = 120;
-        } else if (new_tempo > 400) {
-            new_tempo = 400;
+        // Clamp tempo between 60 and 500
+        if (new_tempo < 60) {
+            new_tempo = 60;
+        } else if (new_tempo > 500) {
+            new_tempo = 500;
         }
         
         knocker.setTempo(new_tempo);
@@ -423,6 +431,47 @@ void mesh_knocking_received(JsonDocument& doc) {
 void mesh_knocked_received(JsonDocument& doc) {
     int obj_id = doc["id"] | -1;
     ESP_LOGD(TAG, "Mesh knocked received from obj_id: %d", obj_id);
+    
+    if (!suspended && !paused) {
+        knocker.knock();
+    }
+}
+
+void mesh_tweeting_received(JsonDocument& doc) {
+    int obj_id = doc["id"] | -1;
+    ESP_LOGD(TAG, "Mesh tweeting received from obj_id: %d", obj_id);
+    
+    int sender_tempo = doc["tempo"] | 400;  // Default to 400 if not present
+    
+    ESP_LOGD(TAG, "Tempo: %d", sender_tempo);
+    
+    // Apply random subdiv (pattern is ignored)
+    float subdiv = random(1, 4) / 2.0f; // 0.5, 1.0, 1.5
+    
+    // Adjust tempo by ±10 to ±80
+    int tempo_change = random(1, 9) * 10;  // 10, 20, 30, 40, 50, 60, 70, 80
+    if (random(0, 2) == 0) {
+        tempo_change = -tempo_change;  // 50% chance to decrease
+    }
+    
+    int new_tempo = sender_tempo + tempo_change;
+    
+    // Clamp tempo between 60 and 500
+    if (new_tempo < 60) {
+        new_tempo = 60;
+    } else if (new_tempo > 500) {
+        new_tempo = 500;
+    }
+    
+    knocker.setTempo(new_tempo);
+    ESP_LOGI(TAG, "Tempo adjusted: %d -> %d (change: %+d)", sender_tempo, new_tempo, tempo_change);
+    
+    suspend(true, suspend_timeout_short);
+}
+
+void mesh_tweeted_received(JsonDocument& doc) {
+    int obj_id = doc["id"] | -1;
+    ESP_LOGD(TAG, "Mesh tweeted received from obj_id: %d", obj_id);
     
     if (!suspended && !paused) {
         knocker.knock();
