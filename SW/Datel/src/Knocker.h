@@ -36,6 +36,15 @@ public:
         }
     };
 
+    void peck(float freq, uint32_t dur, float curve) {
+        peck_interval = (uint32_t)(1000.0f / freq);
+        peck_total    = dur / peck_interval;
+        peck_step     = 0;
+        peck_curve    = curve;
+        t_peck.setInterval(peck_interval);
+        t_peck.restart();
+    };
+
     void setPattern(const String& new_pattern) {
         pattern = new_pattern;
     };
@@ -107,20 +116,47 @@ private:
         ESP_LOGD(KNOCK_TAG, "Knock %u off", instance->knock_index);
     }
 
+    static void peck_callback() {
+        uint32_t n = instance->peck_total;
+        uint32_t i = instance->peck_step;
+        float t = (n > 1) ? (float)i / (float)(n - 1) : 1.0f;
+        float c = instance->peck_curve;
+
+        float env;
+        if (c == 0.0f)     env = 1.0f;
+        else if (c > 0.0f) env = powf(t, c);
+        else               env = powf(1.0f - t, -c);
+
+        uint8_t vel = (uint8_t)(instance->velocity * env);
+        analogWrite(instance->pin, vel);
+        instance->t_off.restartDelayed();
+        ESP_LOGD(KNOCK_TAG, "Peck %u/%u vel=%u", i, n, vel);
+
+        instance->peck_step++;
+        if (instance->peck_step >= n) {
+            instance->t_peck.disable();
+        }
+    }
+
     Scheduler scheduler;
 
     String pattern { "xxx_" };
 
     Task t_knock { 300UL, TASK_ONCE, &Knocker::knock_callback, &scheduler, false };
-    Task t_off { OFF_TIME, TASK_ONCE, &Knocker::off_callback, &scheduler, false };
+    Task t_off   { OFF_TIME, TASK_ONCE, &Knocker::off_callback, &scheduler, false };
+    Task t_peck  { 50UL, TASK_FOREVER, &Knocker::peck_callback, &scheduler, false };
 
     uint8_t pin;
     uint16_t tempo;
 
     uint8_t velocity = 255;
-    uint8_t current_velocity = 255;  // Working velocity that decays during knock sequence
+    uint8_t current_velocity = 255;
 
-    uint8_t knock_index = 0;
+    uint8_t  knock_index    = 0;
+    uint32_t peck_interval  = 50;
+    uint32_t peck_step      = 0;
+    uint32_t peck_total     = 0;
+    float    peck_curve     = 0.0f;
 
     void (*onStarted)() = nullptr;
     void (*onFinished)() = nullptr;
