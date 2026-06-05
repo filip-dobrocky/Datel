@@ -233,13 +233,27 @@ void loop() {
         knocker.knock();
         ESP_LOGI(TAG, "Knock!");
     }
-    #endif
+    #elif TEST_PECK
+    knocker.update();
+    static uint32_t last_peck = 0;
+    static uint8_t peck_phase = 0;
+    if (millis() - last_peck > 3000) {
+        last_peck = millis();
+        switch (peck_phase % 3) {
+            case 0: knocker.peck(19.0f,  2000, 0.0f);  ESP_LOGI(TAG, "Peck: flat");     break;
+            case 1: knocker.peck(19.0f,  2000, -2.0f); ESP_LOGI(TAG, "Peck: fade out"); break;
+            case 2: knocker.peck(19.0f,  2000,  2.0f); ESP_LOGI(TAG, "Peck: fade in");  break;
+        }
+        peck_phase++;
+    }
+    #else
     
     mesh.update();  // This calls userScheduler.execute() internally
     knocker.update();
 
     // All nodes handle OSC (so external device can connect to any node)
     osc_control_loop(udp, base_address, info_address);
+    #endif
 }
 
 // === Function Definitions ===
