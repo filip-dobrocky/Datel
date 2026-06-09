@@ -1,3 +1,6 @@
 [submodule "HW/ESP32-C3-DevKit-Lipo"]
 	path = HW/ESP32-C3-DevKit-Lipo
 	url = https://github.com/OLIMEX/ESP32-C3-DevKit-Lipo.git
+[submodule "SW/Datel/lib/Ecosystem"]
+	path = SW/Datel/lib/Ecosystem
+	url = https://github.com/filip-dobrocky/Ecosystem.git
