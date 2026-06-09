@@ -239,10 +239,11 @@ void loop() {
     static uint8_t peck_phase = 0;
     if (millis() - last_peck > 3000) {
         last_peck = millis();
-        switch (peck_phase % 3) {
-            case 0: knocker.peck(19.0f,  2000, 0.0f);  ESP_LOGI(TAG, "Peck: flat");     break;
-            case 1: knocker.peck(19.0f,  2000, -2.0f); ESP_LOGI(TAG, "Peck: fade out"); break;
-            case 2: knocker.peck(19.0f,  2000,  2.0f); ESP_LOGI(TAG, "Peck: fade in");  break;
+        switch (peck_phase % 4) {
+            case 0: knocker.peck(20.0f,  2000, 0.0f, 255);  ESP_LOGI(TAG, "Peck: flat");     break;
+            case 1: knocker.peck(14.0f,  2000, -10.0f, 255); ESP_LOGI(TAG, "Peck: fade out"); break;
+            case 2: knocker.peck(8.0f,  2000,  6.0f, 255); ESP_LOGI(TAG, "Peck: fade in");  break;
+            case 3: knocker.peck(18.0f,  2000, -15.0f, 255); ESP_LOGI(TAG, "Peck: strong fade out"); break;
         }
         peck_phase++;
     }
