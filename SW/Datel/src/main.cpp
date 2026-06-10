@@ -24,6 +24,11 @@
 
 #define BAT_PIN 3
 
+// Bump for every OTA release. Travels in the mesh "ping" and the /info/ping
+// OSC telemetry, so the controller can watch each node flip to the new
+// version as the swarm updates (old pre-versioning firmware reports 0).
+#define FW_VERSION 1
+
 const char *TAG = "Datel";
 
 // === Ecosystem node (mesh + OSC) ===
@@ -156,8 +161,12 @@ static void on_pause(JsonDocument &doc, uint32_t /*from*/) {
 
 static void on_ping(JsonDocument &doc, uint32_t /*from*/) {
     int obj_id = doc["id"] | -1;
+    int version = doc["version"] | 0;  // 0 = pre-versioning firmware
     // Forward to the controller; only the node hosting it actually delivers.
-    eco.forwardOsc("/ping", [obj_id](OSCMessage &m) { m.add(obj_id); });
+    eco.forwardOsc("/ping", [obj_id, version](OSCMessage &m) {
+        m.add(obj_id);
+        m.add(version);
+    });
 }
 
 static void on_suspended(JsonDocument &doc, uint32_t /*from*/) {
@@ -307,8 +316,9 @@ void setup() {
 
     ESP_LOGI(TAG, "Node ID: %u, OBJ_ID: %d, isRoot: %d", eco.mesh().getNodeId(),
              g_obj_id, eco.isRoot());
-    ESP_LOGI(TAG, "FW build %s %s, md5 %s, AP %s", __DATE__, __TIME__,
-             ESP.getSketchMD5().c_str(), WiFi.softAPIP().toString().c_str());
+    ESP_LOGI(TAG, "FW v%d, build %s %s, md5 %s, AP %s", FW_VERSION, __DATE__,
+             __TIME__, ESP.getSketchMD5().c_str(),
+             WiFi.softAPIP().toString().c_str());
 }
 
 void loop() {
@@ -356,8 +366,11 @@ void send_knocking() {
 void send_knocked() { eco.broadcast("knocked"); }
 
 void send_ping() {
-    eco.broadcast("ping");
-    eco.forwardOsc("/ping", [](OSCMessage &m) { m.add(g_obj_id); });
+    eco.broadcast("ping", [](JsonDocument &d) { d["version"] = FW_VERSION; });
+    eco.forwardOsc("/ping", [](OSCMessage &m) {
+        m.add(g_obj_id);
+        m.add((int)FW_VERSION);
+    });
 }
 
 void send_battery() {

@@ -68,7 +68,9 @@ Evaluate the block below once, then call the ~helpers or run the demo at the bot
 thisProcess.openUDPPort(54355);
 
 OSCdef(\ping, { |msg, time, addr|
-	("ping   <- id" + msg[1]).postln;
+	// msg[2] = firmware version (0 / nil = pre-versioning firmware) — watch it
+	// flip per node during an OTA rollout.
+	("ping   <- id" + msg[1] + "fw v" + (msg[2] ? 0)).postln;
 }, "/info/ping", recvPort: 54355);
 
 OSCdef(\battery, { |msg, time, addr|
@@ -91,7 +93,7 @@ OSCdef(\suspended, { |msg, time, addr|
 ~pattern.(4, "xx_xx_");    // node 4 plays this now
 ~pattern.(4, "x0fxffxxxf0xxx________xf0x____x_x");    // node 4 plays this now
 ~pattern.(11, "xx_p750AFF_xx_"); // hits + a peck
-~peck.(4, 14, 20000, -6, 1.0);   // node 4: single 2 s peck, fade in
+~peck.(4, 10, 20000, -2, 1.0);   // node 4: single 2 s peck, fade in
 ~peck.(11, 16, 5000, -3, 1.0);     // node 11: softer peck
 ~velocity.(1);           // half master gain
 ~pause.(1);                // silence everything (manual cmds ignored too)
