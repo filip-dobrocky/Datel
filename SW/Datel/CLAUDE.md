@@ -34,6 +34,11 @@ The node identity (`OBJ_ID`) lives in **NVS**, not in the firmware image. Envs:
 
 ### OTA update (whole swarm, no USB)
 
+Scripted (recommended): join any node's softAP, bump `FW_VERSION` in
+`src/main.cpp`, then `python tools/ota_update.py [--watch]` — builds the env
+(default `olimex_c3_deploy`), auto-detects the node (gateway `10.x.y.1`),
+uploads, and verifies the distributor's md5 echo. Manually:
+
 1. `pio run -e olimex_c3_deploy` -> `.pio/build/olimex_c3_deploy/firmware.bin`.
 2. Optionally OSC `/pause 1` to quiet the swarm.
 3. Join any node's softAP and upload: `curl -F "fw=@firmware.bin" http://10.x.y.1/fw`
