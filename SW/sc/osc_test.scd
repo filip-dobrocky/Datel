@@ -15,11 +15,25 @@ Evaluate the block below once, then call the ~helpers or run the demo at the bot
 
 (
 // --- target node -----------------------------------------------------------
-// The gateway IP of the node's softAP you are connected to. painlessMesh APs
-// are 10.x.y.1; check your OS network info if unsure. Commands are still routed
-// to any target id over the mesh regardless of which node you send to.
-~ip   = "10.69.217.1";          // <-- set to the AP gateway you are connected to
-~node = NetAddr(~ip, 54345);
+// Auto-detect the node: it is always .1 of the softAP subnet the Wi-Fi adapter
+// joined (painlessMesh hands out 10.x.y.1). We unicast to that gateway — a
+// 255.255.255.255 broadcast would leave via the default-route (Ethernet)
+// interface and never reach the swarm. Re-run this block after reconnecting and
+// the address follows the new AP, so there is nothing to edit by hand.
+~findNode = {
+	var cmd = "powershell -NoProfile -Command \"(Get-NetIPConfiguration | "
+		++ "Where-Object { $_.IPv4DefaultGateway.NextHop -like '10.*' } | "
+		++ "Select-Object -First 1).IPv4DefaultGateway.NextHop\"";
+	var ip = cmd.unixCmdGetStdOut.stripWhiteSpace;
+	if (ip.isEmpty) {
+		"Datel: no 10.x.y.1 gateway found — is Wi-Fi joined to a node's AP?".warn;
+		ip = "10.0.0.1";
+	};
+	~ip = ip;
+	~node = NetAddr(~ip, 54345);
+	~ip;
+};
+~findNode.();
 
 // --- command helpers -------------------------------------------------------
 // global emergence master: on(1)/off(0). off => every node stops mutating,
@@ -75,22 +89,23 @@ OSCdef(\suspended, { |msg, time, addr|
 ~auto.(0);                 // freeze the swarm (manual mode)
 ~listen.(11, 1);            // re-enable emergence on node 11 only
 ~pattern.(4, "xx_xx_");    // node 4 plays this now
-~pattern.(0, "xx_p750AFF_xx_"); // hits + a peck
-~peck.(0, 14, 2000, -6, 1.0);   // node 0: single 2 s peck, fade in
-~peck.(3, 8, 1500, 6, 0.7);     // node 3: softer peck
-~velocity.(0.5);           // half master gain
+~pattern.(4, "x0fxffxxxf0xxx________xf0x____x_x");    // node 4 plays this now
+~pattern.(11, "xx_p750AFF_xx_"); // hits + a peck
+~peck.(4, 14, 20000, -6, 1.0);   // node 4: single 2 s peck, fade in
+~peck.(11, 16, 5000, -3, 1.0);     // node 11: softer peck
+~velocity.(1);           // half master gain
 ~pause.(1);                // silence everything (manual cmds ignored too)
 ~pause.(0);                // resume
 ~auto.(1);                 // back to autonomous emergent behaviour
 
 // ---------------------------------------------------------------------------
-// Demo routine: manual mode, walk a peck across nodes 0..5.
+// Demo routine: manual mode, walk a peck across nodes 0..11.
 // ---------------------------------------------------------------------------
 (
 Routine({
 	~auto.(0);
 	0.5.wait;
-	(0..5).do { |id|
+	(0..11).do { |id|
 		~peck.(id, rrand(6, 18), 1500, rrand(-8, 8), 1.0);
 		0.6.wait;
 	};

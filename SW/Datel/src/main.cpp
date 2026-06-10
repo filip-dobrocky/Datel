@@ -226,6 +226,11 @@ void setup() {
     });
     suspendMgr.onIdle([]() { if (g_listen) knocker.knock(); });
 
+    // Blink the builtin LED while paused (low-duty heartbeat; off at rest).
+    // The onboard GPIO8 LED is active-low. Managed on the shared scheduler.
+    suspendMgr.setPauseLed(LED_PIN, /*active_high=*/false, /*on_ms=*/60,
+                           /*period_ms=*/2000, /*rest_lit=*/false);
+
     // === Knocker ===
     knocker.setTempo(300);
     // Steps: 2 hits, rest, peck(freq 12Hz, dur 6, curve 0, amp 255), rest, 2 hits, rest
@@ -444,10 +449,11 @@ void measure_battery() {
     battery_voltage = analogReadMilliVolts(BAT_PIN) / 500.0;
     ESP_LOGI(TAG, "Battery: %.2f V", battery_voltage);
 
-    if (battery_voltage < 3.3f) {
+    // While paused, SuspendManager owns the LED (pause blink) -- don't fight it.
+    if (battery_voltage < 3.3f && !suspendMgr.isPaused()) {
         t_low_battery_indication.enable();
     } else {
         t_low_battery_indication.disable();
-        digitalWrite(LED_PIN, HIGH);
+        if (!suspendMgr.isPaused()) digitalWrite(LED_PIN, HIGH);
     }
 }
