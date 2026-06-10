@@ -3,6 +3,7 @@
 #include <Arduino.h>
 // Use painlessMesh's TaskScheduler
 #include "painlessMesh.h"
+#include "Pattern.h"
 
 #ifndef KNOCKER_OFF_TIME_SCALE
 #define KNOCKER_OFF_TIME_SCALE 500UL
@@ -39,8 +40,9 @@ public:
     };
 
     void knock() {
+        step_count = parsePattern(pattern, steps, MAX_STEPS);
+        if (step_count == 0) return;
         knock_index = 0;
-        current_velocity = velocity;  // Reset to full velocity at start
         t_knock.restart();
         if (onStarted) {
             onStarted();
@@ -59,6 +61,7 @@ public:
 
     void setPattern(const String& new_pattern) {
         pattern = new_pattern;
+        step_count = parsePattern(pattern, steps, MAX_STEPS);
     };
 
     String getPattern() const {
@@ -99,35 +102,44 @@ private:
     }
 
     static void knock_callback() {
-        if (instance->pattern[instance->knock_index] == 'x') {
-            uint32_t note_ms = 15000UL / instance->tempo;
-            uint32_t off_time = calc_off_time(note_ms);
-            instance->t_off.setInterval(off_time);
-            analogWrite(instance->pin, instance->current_velocity);
-            instance->t_off.restartDelayed();
-            ESP_LOGD(KNOCK_TAG, "Knock %u vel=%u", instance->knock_index, instance->current_velocity);
-            
-            // Decrease velocity for next knock (decay effect)
-            if (instance->current_velocity > 2) {
-                instance->current_velocity -= 2;
-            } else {
-                instance->current_velocity = 0;
-            }
-        } else {
-            analogWrite(instance->pin, 0);
+        Knocker* k = instance;
+        uint32_t note_ms = 15000UL / k->tempo; // sixteenth note duration in ms
+        uint32_t span = 1;                     // musical steps this struct consumes
+
+        const Step& st = k->steps[k->knock_index];
+
+        if (k->t_peck.isEnabled()) {
+            // A peck is still ringing: it owns the pin (ring-over). Stay silent
+            // this tick to avoid contending for the shared t_off / PWM.
+            analogWrite(k->pin, 0);
+        } else if (st.type == STEP_HIT) {
+            uint8_t out = (uint16_t)st.velocity * k->velocity / 255; // master gain
+            k->t_off.setInterval(calc_off_time(note_ms));
+            analogWrite(k->pin, out);
+            k->t_off.restartDelayed();
+            ESP_LOGD(KNOCK_TAG, "Hit %u vel=%u", k->knock_index, out);
+        } else if (st.type == STEP_PECK) {
+            uint8_t amp = (uint16_t)st.amp * k->velocity / 255; // master gain
+            // peck() takes dur in ms; Step stores dur in steps -> convert.
+            k->peck(st.freq, (uint32_t)st.dur * note_ms, (float)st.curve, amp);
+            span = st.dur;
+            ESP_LOGD(KNOCK_TAG, "Peck %u f=%u dur=%u amp=%u", k->knock_index,
+                     st.freq, st.dur, amp);
+        } else { // STEP_REST
+            analogWrite(k->pin, 0);
         }
 
-        instance->knock_index++;
-        if (instance->knock_index < instance->pattern.length()) {
-            uint32_t interval = 15000UL / instance->tempo; // sixteenth note duration in ms
+        k->knock_index++;
+        if (k->knock_index < k->step_count) {
+            uint32_t interval = span * note_ms;
             if (interval < 30) interval = 30;
-            instance->t_knock.restartDelayed(interval);
+            k->t_knock.restartDelayed(interval);
         }
         else {
-            instance->knock_index = 0;
-            instance->t_knock.disable();
-            if (instance->onFinished) {
-                instance->onFinished();
+            k->knock_index = 0;
+            k->t_knock.disable();
+            if (k->onFinished) {
+                k->onFinished();
             }
         }
     }
@@ -164,6 +176,8 @@ private:
     Scheduler scheduler;
 
     String pattern { "xxx_" };
+    Step    steps[MAX_STEPS];
+    uint8_t step_count = 0;
 
     Task t_knock { 300UL, TASK_ONCE, &Knocker::knock_callback, &scheduler, false };
     Task t_off   { 25UL, TASK_ONCE, &Knocker::off_callback, &scheduler, false };
@@ -172,8 +186,7 @@ private:
     uint8_t pin;
     uint16_t tempo;
 
-    uint8_t velocity = 255;
-    uint8_t current_velocity = 255;
+    uint8_t velocity = 255;  // master gain applied to every hit/peck (0..255)
 
     uint8_t  knock_index    = 0;
     uint32_t peck_interval  = 50;

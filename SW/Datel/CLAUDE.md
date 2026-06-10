@@ -7,7 +7,8 @@ and the swarm is steered externally over OSC/UDP. Built with PlatformIO + Arduin
 
 The shared mesh/OSC/state-machine code lives in the **Ecosystem** library
 (`lib/Ecosystem`, a git submodule shared with the sibling `birb` project). Datel
-keeps only its actuator (`Knocker`) and its rhythm `Mutator` locally.
+keeps its actuator (`Knocker`), its rhythm `Mutator`, and the pattern notation
+(`Pattern.h`) locally.
 
 ## Build / flash / monitor
 
@@ -38,18 +39,48 @@ Project-local files (`src/`):
   `EcosystemNode eco` + `SuspendManager suspendMgr`, registers mesh handlers
   (`eco.onMessage`) and OSC handlers (`eco.onOsc`), then `eco.begin()`. `loop()`
   pumps `eco.update()` (mesh + OSC) and `knocker.update()`.
-- **`Knocker.h`** — drives the solenoid via PWM (`analogWrite`, 20 kHz). Plays a
-  string pattern (`'x'` = hit, anything else = rest) at a tempo, with per-hit velocity
-  decay. Uses its own `TaskScheduler` (`t_knock`/`t_off`/`t_peck`). `peck()` fires rapid
-  envelope-shaped hits. Singleton via `Knocker::instance` because TaskScheduler callbacks
-  must be static.
-- **`Mutator.h`** — genetic mutation of rhythm patterns, subclassing the library's
-  `MutatorBase`. Genes (`A`-`G`) map to operators (add/remove hit, stretch, compress,
-  shuffle, …); `evolve()` applies sender DNA then own DNA. DNA generation and the
+- **`Pattern.h`** — the step notation, shared by `Knocker` (playback) and `Mutator`
+  (genetics) so there is one parser. A pattern is a sequence of `Step`s, each a **rest**,
+  a **hit** (with per-step velocity), or a **peck** (freq/dur/curve/amp). `parsePattern`/
+  `serializePattern` convert between the `Step[]` and the serialized string sent over the
+  mesh; see the *Pattern notation* section. Amplitude floors and limits (`HIT_AMP_MIN`,
+  `PECK_AMP_MIN`, `MAX_STEPS`, …) are `#define`s here, overridable per target via `-D`.
+- **`Knocker.h`** — drives the solenoid via PWM (`analogWrite`, 20 kHz). Parses the
+  pattern string into `Step[]` and plays it at a tempo (one rest/hit per 16th-note; a peck
+  occupies `dur` steps). Each hit plays its own velocity — there is **no** running decay;
+  dynamics live in the pattern. `setVelocity()` (driven by OSC/mesh `velocity`) is a
+  **master gain** scaling every hit/peck. Uses its own `TaskScheduler`
+  (`t_knock`/`t_off`/`t_peck`); `peck()` fires rapid envelope-shaped hits and, while
+  ringing, owns the pin (the knock loop gates on `t_peck.isEnabled()`, ring-over allowed).
+  Singleton via `Knocker::instance` because TaskScheduler callbacks must be static.
+- **`Mutator.h`** — genetic mutation of patterns, subclassing the library's `MutatorBase`,
+  operating on `Step[]`. Genes `A`-`G` are the rhythm operators (add/remove hit, burst
+  rests, duplicate, shuffle, stretch, compress); `H`-`N` are peck/velocity operators
+  (hit↔peck, mutate freq/curve/amp/dur, mutate hit velocity). `evolve()` parses the input,
+  applies sender DNA then own DNA, sanitizes, and re-serializes. DNA generation and the
   `chaos` ramp live in `MutatorBase`.
 
 Shared library (`lib/Ecosystem`): `EcosystemNode` (mesh + OSC), `SuspendManager`
 (suspended/paused/idle state), `MutatorBase`, `EcosystemConfig.h`. See its README.
+
+### Pattern notation
+
+Patterns are serialized as a string of fixed-width, self-delimiting tokens (the markers
+`_ x p` are non-hex, so hex fields parse unambiguously; hex is uppercase):
+
+- `_` — **rest** (one 16th-note step).
+- `x` — **hit** at the default velocity; `x` + `HH` — hit with explicit velocity byte
+  (clamped `>= HIT_AMP_MIN`). One step.
+- `p` + `F D CC AA` — **peck**, occupying `dur` steps: `F` = freq nibble (`freq-5`, 5-20 Hz),
+  `D` = dur nibble (`dur-1`, 1-16 steps), `CC` = curve byte (`curve+10`, -10..10), `AA` =
+  amp byte (clamped `>= PECK_AMP_MIN`).
+
+Three lengths are distinct and must not be conflated: **step count** (number of `Step`
+structs, used by the mutator), **musical length** (sum of step durations, used to schedule
+playback), and **serialized char length** (used for the mesh/`MAX_PATTERN_LEN` bound). The
+parser skips whitespace (so human-authored literals can be spaced) and is OOB-safe —
+malformed/truncated tokens are dropped. The whole swarm must run matching firmware; old
+firmware cannot parse `p…`/`xHH` tokens (plain `x_` strings still parse on both).
 
 ### Mesh protocol
 

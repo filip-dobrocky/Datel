@@ -182,7 +182,8 @@ void setup() {
 
     // === Knocker ===
     knocker.setTempo(300);
-    knocker.setPattern("xxxx____xxx___x___");
+    // Steps: 2 hits, rest, peck(freq 12Hz, dur 6, curve 0, amp 255), rest, 2 hits, rest
+    knocker.setPattern("xx_p750AFF_xx_");
 
     knocker.setOnStarted([]() {
         ESP_LOGI(TAG, "Knocking started");
