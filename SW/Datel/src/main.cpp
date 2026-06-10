@@ -38,6 +38,10 @@ Mutator mutator(OBJ_ID);
 bool knocking = false;
 float battery_voltage = 0.0f;
 
+// === Control mode ===
+bool g_auto = true;    // global emergence master (informational/log)
+bool g_listen = true;  // this node participates in emergence
+
 // === Function Prototypes ===
 void send_knocking();
 void send_knocked();
@@ -47,6 +51,15 @@ void send_velocity(float norm_value);
 
 void osc_pause_received(OSCMessage &m);
 void osc_velocity_received(OSCMessage &m);
+void osc_auto_received(OSCMessage &m);
+void osc_listen_received(OSCMessage &m);
+void osc_pattern_received(OSCMessage &m);
+void osc_peck_received(OSCMessage &m);
+
+void set_listen(bool v);
+void apply_listen(int id, int v);
+void apply_pattern(int id, const char *pat);
+void apply_peck(int id, float freq, float dur_ms, float curve, float amp_norm);
 
 void mutate_pattern(const char *pattern, const char *sender_dna);
 void measure_battery();
@@ -66,6 +79,8 @@ Task t_send_battery(60000, TASK_FOREVER, &send_battery, &eco.scheduler(), false)
 
 // === Mesh message handlers ===
 static void on_knocking(JsonDocument &doc, uint32_t /*from*/) {
+    if (!g_listen) return;
+
     const char *pattern = doc["pattern"];
     const char *sender_dna = doc["dna"];
     int sender_tempo = doc["tempo"] | 400;
@@ -88,10 +103,12 @@ static void on_knocking(JsonDocument &doc, uint32_t /*from*/) {
 }
 
 static void on_knocked(JsonDocument & /*doc*/, uint32_t /*from*/) {
-    if (suspendMgr.active()) knocker.knock();
+    if (g_listen && suspendMgr.active()) knocker.knock();
 }
 
 static void on_tweeting(JsonDocument &doc, uint32_t /*from*/) {
+    if (!g_listen) return;
+
     int sender_tempo = doc["tempo"] | 400;
 
     // birb variant: random subdivision (pattern ignored), random-walk tempo
@@ -105,7 +122,7 @@ static void on_tweeting(JsonDocument &doc, uint32_t /*from*/) {
 }
 
 static void on_tweeted(JsonDocument & /*doc*/, uint32_t /*from*/) {
-    if (suspendMgr.active()) knocker.knock();
+    if (g_listen && suspendMgr.active()) knocker.knock();
 }
 
 static void on_pause(JsonDocument &doc, uint32_t /*from*/) {
@@ -145,6 +162,27 @@ static void on_velocity(JsonDocument &doc, uint32_t /*from*/) {
     ESP_LOGI(TAG, "Mesh velocity: %.3f", norm);
 }
 
+static void on_auto(JsonDocument &doc, uint32_t /*from*/) {
+    int v = doc["state"] | 1;
+    g_auto = (v != 0);
+    set_listen(v != 0);
+    ESP_LOGI(TAG, "Mesh auto: %d", v);
+}
+
+static void on_listen(JsonDocument &doc, uint32_t /*from*/) {
+    apply_listen(doc["id"] | -1, doc["state"] | 0);
+}
+
+static void on_pattern(JsonDocument &doc, uint32_t /*from*/) {
+    const char *p = doc["pattern"];
+    if (p) apply_pattern(doc["id"] | -1, p);
+}
+
+static void on_peck(JsonDocument &doc, uint32_t /*from*/) {
+    apply_peck(doc["id"] | -1, doc["freq"] | 12.0f, doc["dur"] | 2000.0f,
+               doc["curve"] | 0.0f, doc["amp"] | 1.0f);
+}
+
 // === Setup & Loop ===
 void setup() {
     pinMode(LED_PIN, OUTPUT);
@@ -160,9 +198,17 @@ void setup() {
     eco.onMessage("suspended", on_suspended);
     eco.onMessage("battery", on_battery);
     eco.onMessage("velocity", on_velocity);
+    eco.onMessage("auto", on_auto);
+    eco.onMessage("listen", on_listen);
+    eco.onMessage("pattern", on_pattern);
+    eco.onMessage("peck", on_peck);
 
     eco.onOsc("/pause", osc_pause_received);
     eco.onOsc("/velocity", osc_velocity_received);
+    eco.onOsc("/auto", osc_auto_received);
+    eco.onOsc("/listen", osc_listen_received);
+    eco.onOsc("/pattern", osc_pattern_received);
+    eco.onOsc("/peck", osc_peck_received);
 
     eco.begin(WIFI_SSID, WIFI_PASS);
 
@@ -178,7 +224,7 @@ void setup() {
         });
         ESP_LOGI(TAG, "Suspended: %u", suspendMgr.isSuspended());
     });
-    suspendMgr.onIdle([]() { knocker.knock(); });
+    suspendMgr.onIdle([]() { if (g_listen) knocker.knock(); });
 
     // === Knocker ===
     knocker.setTempo(300);
@@ -300,7 +346,92 @@ void osc_velocity_received(OSCMessage &m) {
     send_velocity(norm);  // distribute to the rest of the swarm
 }
 
+void osc_auto_received(OSCMessage &m) {
+    if (m.size() == 0) return;
+    int v = m.getInt(0);
+    g_auto = (v != 0);
+    set_listen(v != 0);
+    eco.broadcast("auto", [v](JsonDocument &d) { d["state"] = v; });
+    ESP_LOGI(TAG, "OSC auto: %d (broadcast to mesh)", v);
+}
+
+void osc_listen_received(OSCMessage &m) {
+    if (m.size() < 2) return;
+    int id = m.getInt(0);
+    int v = m.getInt(1);
+    apply_listen(id, v);
+    eco.broadcast("listen", [id, v](JsonDocument &d) {
+        d["id"] = id;
+        d["state"] = v;
+    });
+    ESP_LOGI(TAG, "OSC listen: id=%d state=%d (broadcast to mesh)", id, v);
+}
+
+void osc_pattern_received(OSCMessage &m) {
+    if (m.size() < 2) return;
+    int id = m.getInt(0);
+    char pat[MAX_PATTERN_LEN];
+    pat[0] = '\0';
+    m.getString(1, pat, MAX_PATTERN_LEN);
+    apply_pattern(id, pat);
+    String p(pat);
+    eco.broadcast("pattern", [id, p](JsonDocument &d) {
+        d["id"] = id;
+        d["pattern"] = p;
+    });
+    ESP_LOGI(TAG, "OSC pattern: id=%d pattern=%s (broadcast to mesh)", id, pat);
+}
+
+void osc_peck_received(OSCMessage &m) {
+    if (m.size() < 4) return;
+    int id = m.getInt(0);
+    float freq = m.getFloat(1);
+    float dur = m.getFloat(2);
+    float curve = m.getFloat(3);
+    float amp = (m.size() > 4) ? m.getFloat(4) : 1.0f;
+    if (isnan(amp)) amp = 1.0f;
+    apply_peck(id, freq, dur, curve, amp);
+    eco.broadcast("peck", [id, freq, dur, curve, amp](JsonDocument &d) {
+        d["id"] = id;
+        d["freq"] = freq;
+        d["dur"] = dur;
+        d["curve"] = curve;
+        d["amp"] = amp;
+    });
+    ESP_LOGI(TAG, "OSC peck: id=%d freq=%.1f dur=%.1f curve=%.1f amp=%.2f", id,
+             freq, dur, curve, amp);
+}
+
 // === Helpers ===
+void set_listen(bool v) {
+    g_listen = v;
+    if (v) suspendMgr.pokeIdle(IDLE_TIMEOUT);  // re-arm idle self-trigger
+    else suspendMgr.cancelIdle();              // stop self-triggering when quiet
+    ESP_LOGI(TAG, "Listen: %d", v);
+}
+
+void apply_listen(int id, int v) {
+    if (id == OBJ_ID) set_listen(v != 0);
+}
+
+void apply_pattern(int id, const char *pat) {
+    if (id != OBJ_ID || suspendMgr.isPaused()) return;  // respect pause
+    knocker.setPattern(pat);
+    knocker.knock();  // play immediately
+    ESP_LOGI(TAG, "Pattern set & played: %s", pat);
+}
+
+void apply_peck(int id, float freq, float dur_ms, float curve, float amp_norm) {
+    if (id != OBJ_ID || suspendMgr.isPaused()) return;  // respect pause
+    if (dur_ms < 0.0f) dur_ms = 0.0f;
+    uint8_t amp =
+        clampPeckAmp((int)roundf(constrain(amp_norm, 0.0f, 1.0f) * 255.0f));
+    knocker.peck(clampFreq((int)roundf(freq)), (uint32_t)roundf(dur_ms),
+                 (float)clampCurve((int)roundf(curve)), amp);
+    ESP_LOGI(TAG, "Peck: freq=%.1f dur_ms=%.0f curve=%.1f amp=%u", freq, dur_ms,
+             curve, amp);
+}
+
 void mutate_pattern(const char *pattern, const char *sender_dna) {
     char mutated_pattern[MAX_PATTERN_LEN];
     memset(mutated_pattern, 0, MAX_PATTERN_LEN);
