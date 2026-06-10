@@ -1,10 +1,14 @@
 #include <Arduino.h>
+#include <LittleFS.h>
 
+#include "EcosystemIdentity.h"
 #include "EcosystemNode.h"
+#include "OtaDistributor.h"
 #include "SuspendManager.h"
 
 #include "Knocker.h"
 #include "Mutator.h"
+#include "NodeConfig.h"
 
 #ifndef WIFI_SSID
 #include "secrets.h"
@@ -23,8 +27,17 @@
 const char *TAG = "Datel";
 
 // === Ecosystem node (mesh + OSC) ===
-EcosystemConfig datel_cfg{OBJ_ID, ECO_IS_ROOT, "/datel", "/info"};
+// The real identity (obj id + root flag) is set at runtime in setup() via
+// eco.setIdentity(): provisioning builds seed it from -DOBJ_ID into NVS,
+// the generic OTA image loads it from NVS (see EcosystemIdentity.h).
+static EcosystemConfig make_datel_cfg() {
+    EcosystemConfig cfg{-1, false, "/datel", "/info"};
+    cfg.ota_role = "datel";  // mesh OTA receive; role-matched vs. "birb"
+    return cfg;
+}
+EcosystemConfig datel_cfg = make_datel_cfg();
 EcosystemNode eco(datel_cfg);
+int g_obj_id = -1;  // runtime object id (NVS); -1 = unprovisioned
 
 // === State machine ===
 static const uint32_t SUSPEND_LONG = 12000;
@@ -34,9 +47,12 @@ SuspendManager suspendMgr(eco.scheduler(), IDLE_TIMEOUT);
 
 // === Actuator & genetics ===
 Knocker knocker(SOL_PIN);
-Mutator mutator(OBJ_ID);
+Mutator mutator(0);  // DNA re-derived in setup() once the NVS id is known
 bool knocking = false;
 float battery_voltage = 0.0f;
+
+// === OTA (any node can distribute firmware to the mesh) ===
+OtaDistributor ota(eco.mesh(), eco.scheduler(), "datel");
 
 // === Control mode ===
 bool g_auto = true;    // global emergence master (informational/log)
@@ -76,6 +92,13 @@ Task t_low_battery_indication(2000, TASK_FOREVER, []() {
 
 Task t_ping(5000, TASK_FOREVER, &send_ping, &eco.scheduler(), true);
 Task t_send_battery(60000, TASK_FOREVER, &send_battery, &eco.scheduler(), false);
+
+// Fast blink = node has no id in NVS (generic image on an unprovisioned
+// board). It still joins the mesh and accepts OTA; flash a -DOBJ_ID env
+// over USB once to seed the identity. LED is active-low.
+Task t_unprovisioned_blink(150, TASK_FOREVER, []() {
+    digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+}, &eco.scheduler(), false);
 
 // === Mesh message handlers ===
 static void on_knocking(JsonDocument &doc, uint32_t /*from*/) {
@@ -188,6 +211,30 @@ void setup() {
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, HIGH);
 
+    // === Identity (NVS) ===
+#ifdef OBJ_ID
+    // Provisioning build (per-node env): seed the id into NVS over USB.
+    g_obj_id = OBJ_ID;
+    EcosystemIdentity::save(OBJ_ID);
+    // A USB flash bypasses the OTA bookkeeping; drop the stale installed-md5
+    // record so the next mesh OTA offer is not wrongly deduped.
+    if (LittleFS.begin(true)) LittleFS.remove("/ota_fw.json");
+#else
+    // Generic OTA image: identity comes from NVS only.
+    g_obj_id = EcosystemIdentity::load(-1);
+    if (g_obj_id < 0) t_unprovisioned_blink.enable();
+#endif
+    eco.setIdentity(g_obj_id, /*is_root=*/g_obj_id == 0);
+    mutator.regenerateDna((uint8_t)max(g_obj_id, 0));
+
+    // Per-object hardware tuning (must run before the first setPattern/parse).
+    NodeConfig node_cfg = nodeConfigFor(g_obj_id);
+    knocker.setOffTimeScale(node_cfg.knocker_off_time_scale);
+    g_hit_amp_min      = node_cfg.hit_amp_min;
+    g_peck_amp_min     = node_cfg.peck_amp_min;
+    g_hit_amp_default  = node_cfg.hit_amp_default;
+    g_peck_amp_default = node_cfg.peck_amp_default;
+
     // Register mesh + OSC handlers, then bring the node up.
     eco.onMessage("knocking", on_knocking);
     eco.onMessage("knocked", on_knocked);
@@ -219,7 +266,7 @@ void setup() {
             d["state"] = (int)suspendMgr.isSuspended();
         });
         eco.forwardOsc("/suspended", [](OSCMessage &m) {
-            m.add((int)OBJ_ID);
+            m.add(g_obj_id);
             m.add((int)suspendMgr.isSuspended());
         });
         ESP_LOGI(TAG, "Suspended: %u", suspendMgr.isSuspended());
@@ -255,8 +302,13 @@ void setup() {
     t_measure_battery.restartDelayed(15000UL);
     t_send_battery.restartDelayed(20000UL);
 
+    // Firmware upload endpoint on this node's softAP (mesh OTA distributor).
+    ota.begin();
+
     ESP_LOGI(TAG, "Node ID: %u, OBJ_ID: %d, isRoot: %d", eco.mesh().getNodeId(),
-             OBJ_ID, eco.isRoot());
+             g_obj_id, eco.isRoot());
+    ESP_LOGI(TAG, "FW build %s %s, md5 %s, AP %s", __DATE__, __TIME__,
+             ESP.getSketchMD5().c_str(), WiFi.softAPIP().toString().c_str());
 }
 
 void loop() {
@@ -287,6 +339,7 @@ void loop() {
 #else
     eco.update();      // mesh.update() (runs scheduler) + osc_control_loop()
     knocker.update();
+    ota.update();      // HTTP firmware-upload endpoint (softAP)
 #endif
 }
 
@@ -304,14 +357,14 @@ void send_knocked() { eco.broadcast("knocked"); }
 
 void send_ping() {
     eco.broadcast("ping");
-    eco.forwardOsc("/ping", [](OSCMessage &m) { m.add((int)OBJ_ID); });
+    eco.forwardOsc("/ping", [](OSCMessage &m) { m.add(g_obj_id); });
 }
 
 void send_battery() {
     eco.broadcast("battery",
                   [](JsonDocument &d) { d["voltage"] = battery_voltage; });
     eco.forwardOsc("/battery", [](OSCMessage &m) {
-        m.add((int)OBJ_ID);
+        m.add(g_obj_id);
         m.add(battery_voltage);
     });
     ESP_LOGD(TAG, "Sent battery: %.2f V", battery_voltage);
@@ -416,18 +469,18 @@ void set_listen(bool v) {
 }
 
 void apply_listen(int id, int v) {
-    if (id == OBJ_ID) set_listen(v != 0);
+    if (id == g_obj_id) set_listen(v != 0);
 }
 
 void apply_pattern(int id, const char *pat) {
-    if (id != OBJ_ID || suspendMgr.isPaused()) return;  // respect pause
+    if (id != g_obj_id || suspendMgr.isPaused()) return;  // respect pause
     knocker.setPattern(pat);
     knocker.knock();  // play immediately
     ESP_LOGI(TAG, "Pattern set & played: %s", pat);
 }
 
 void apply_peck(int id, float freq, float dur_ms, float curve, float amp_norm) {
-    if (id != OBJ_ID || suspendMgr.isPaused()) return;  // respect pause
+    if (id != g_obj_id || suspendMgr.isPaused()) return;  // respect pause
     if (dur_ms < 0.0f) dur_ms = 0.0f;
     uint8_t amp =
         clampPeckAmp((int)roundf(constrain(amp_norm, 0.0f, 1.0f) * 255.0f));

@@ -80,6 +80,12 @@ public:
         tempo = new_tempo;
     };
 
+    // Per-object solenoid tuning (NodeConfig), applied at runtime so one
+    // firmware image serves hardware variants.
+    void setOffTimeScale(uint32_t scale) {
+        off_time_scale = scale;
+    };
+
     uint16_t getTempo() const {
         return tempo;
     };
@@ -94,7 +100,7 @@ public:
 
 private:
     static uint32_t calc_off_time(uint32_t interval) {
-        uint32_t t = (interval * interval) / KNOCKER_OFF_TIME_SCALE;
+        uint32_t t = (interval * interval) / instance->off_time_scale;
         t = max(t, KNOCKER_OFF_TIME_MIN);
         t = min(t, KNOCKER_OFF_TIME_MAX);
         t = min(t, interval > KNOCKER_ON_TIME_MIN ? interval - KNOCKER_ON_TIME_MIN : KNOCKER_OFF_TIME_MIN);
@@ -185,6 +191,7 @@ private:
 
     uint8_t pin;
     uint16_t tempo;
+    uint32_t off_time_scale = KNOCKER_OFF_TIME_SCALE;
 
     uint8_t velocity = 255;  // master gain applied to every hit/peck (0..255)
 

@@ -16,12 +16,40 @@ This repo uses a submodule — clone with `git clone --recursive`, or run
 `git submodule update --init` in an existing clone. PlatformIO auto-builds
 `lib/Ecosystem`.
 
-One PlatformIO env per physical node; the env name's trailing number sets `OBJ_ID`
-via a build flag (`olimex_c3_dev0` -> `OBJ_ID=0`, ... `olimex_c3_dev11` -> `OBJ_ID=11`).
+The node identity (`OBJ_ID`) lives in **NVS**, not in the firmware image. Envs:
 
-- Build:   `pio run -e olimex_c3_dev0`
-- Flash:   `pio run -e olimex_c3_dev0 -t upload`
+- `olimex_c3_dev0` … `dev11` — **provisioning** builds: `-DOBJ_ID=n` seeds the id
+  into NVS at boot. Flash once over USB per physical node; the id then survives
+  every reflash (OTA or USB).
+- `olimex_c3_ota` — generic image (no `OBJ_ID`, id from NVS), info-level logs;
+  the artifact for bench-testing OTA.
+- `olimex_c3_deploy` — generic image, `CORE_DEBUG_LEVEL=0`; the production OTA
+  artifact (also the smallest — flash-headroom margin).
+- `olimex_c3_bench` — `TEST_PECK` bench loop; never distribute via OTA (test
+  loops skip `eco.update()`, so such a node drops off the mesh).
+
+- Build:   `pio run -e olimex_c3_deploy`
+- Flash:   `pio run -e olimex_c3_dev0 -t upload` (USB provisioning)
 - Monitor: `pio device monitor` (115200 baud; USB-CDC)
+
+### OTA update (whole swarm, no USB)
+
+1. `pio run -e olimex_c3_deploy` -> `.pio/build/olimex_c3_deploy/firmware.bin`.
+2. Optionally OSC `/pause 1` to quiet the swarm.
+3. Join any node's softAP and upload: `curl -F "fw=@firmware.bin" http://10.x.y.1/fw`
+   (or the browser form at `/`; the AP IP is the gateway and is printed at boot).
+   `GET /status` shows progress, `GET /abort` cancels.
+4. The node stores the image to LittleFS and offers it to the mesh (role
+   `"datel"`, announce repeats for up to 1 h). Each node pulls ~1100 × 1 KiB
+   chunks, verifies MD5, reboots — minutes per node, tens of minutes fleet-wide.
+   The distributor flashes itself last (all nodes done, or 25 min timeout).
+5. There is **no rollback**: a crash-looping image means USB recovery. Bench-test
+   the generic image on one node first, and never ship an image without the OTA
+   receiver compiled in.
+
+An unprovisioned board (generic image, empty NVS) fast-blinks the LED, joins the
+mesh (OTA still works) and ignores id-targeted commands until a `devN` env is
+flashed once.
 
 WiFi credentials live in `src/secrets.h` (`WIFI_SSID` / `WIFI_PASS`) and are meant
 to be untracked. Network ports/channel now come from `EcosystemConfig.h` in the
@@ -35,16 +63,29 @@ continuously. Leave these off for production firmware.
 
 Project-local files (`src/`):
 
-- **`main.cpp`** — wiring only: builds an `EcosystemConfig`, constructs the global
-  `EcosystemNode eco` + `SuspendManager suspendMgr`, registers mesh handlers
-  (`eco.onMessage`) and OSC handlers (`eco.onOsc`), then `eco.begin()`. `loop()`
-  pumps `eco.update()` (mesh + OSC) and `knocker.update()`.
+- **`main.cpp`** — wiring only: builds an `EcosystemConfig` (with `ota_role =
+  "datel"`), constructs the global `EcosystemNode eco` + `SuspendManager
+  suspendMgr` + `OtaDistributor ota`, resolves the runtime identity (`g_obj_id`:
+  seeded from `-DOBJ_ID` into NVS on provisioning builds, loaded from NVS
+  otherwise) and applies it via `eco.setIdentity()` / `mutator.regenerateDna()` /
+  `knocker.setOffTimeScale()`, registers mesh handlers (`eco.onMessage`) and OSC
+  handlers (`eco.onOsc`), then `eco.begin()` + `ota.begin()`. `loop()` pumps
+  `eco.update()` (mesh + OSC), `knocker.update()` and `ota.update()`.
+- **`NodeConfig.h`** — per-object **hardware** constants keyed by the runtime id:
+  `knocker_off_time_scale` (250 for objects 7 and 10, 500 default) plus the
+  amplitude tuning `hit_amp_min` / `peck_amp_min` / `hit_amp_default` /
+  `peck_amp_default` (applied to Pattern.h's `g_*` runtime variables). Only
+  per-hardware tuning belongs here; structural constants every node must agree
+  on (`MAX_STEPS`, the notation) stay compile-time.
 - **`Pattern.h`** — the step notation, shared by `Knocker` (playback) and `Mutator`
   (genetics) so there is one parser. A pattern is a sequence of `Step`s, each a **rest**,
   a **hit** (with per-step velocity), or a **peck** (freq/dur/curve/amp). `parsePattern`/
   `serializePattern` convert between the `Step[]` and the serialized string sent over the
-  mesh; see the *Pattern notation* section. Amplitude floors and limits (`HIT_AMP_MIN`,
-  `PECK_AMP_MIN`, `MAX_STEPS`, …) are `#define`s here, overridable per target via `-D`.
+  mesh; see the *Pattern notation* section. Amplitude floors/defaults (`g_hit_amp_min`,
+  `g_peck_amp_min`, `g_hit_amp_default`, `g_peck_amp_default`) are **runtime** variables
+  here, initialized from `-D`-overridable defaults and overridden per object from
+  `NodeConfig.h` in `setup()`. Structural limits (`MAX_STEPS`, the notation) stay
+  compile-time.
 - **`Knocker.h`** — drives the solenoid via PWM (`analogWrite`, 20 kHz). Parses the
   pattern string into `Step[]` and plays it at a tempo (one rest/hit per 16th-note; a peck
   occupies `dur` steps). Each hit plays its own velocity — there is **no** running decay;
@@ -60,8 +101,10 @@ Project-local files (`src/`):
   applies sender DNA then own DNA, sanitizes, and re-serializes. DNA generation and the
   `chaos` ramp live in `MutatorBase`.
 
-Shared library (`lib/Ecosystem`): `EcosystemNode` (mesh + OSC), `SuspendManager`
-(suspended/paused/idle state), `MutatorBase`, `EcosystemConfig.h`. See its README.
+Shared library (`lib/Ecosystem`): `EcosystemNode` (mesh + OSC + OTA receive),
+`SuspendManager` (suspended/paused/idle state), `MutatorBase`, `EcosystemConfig.h`,
+`EcosystemIdentity.h` (NVS id), `OtaDistributor` (HTTP upload + mesh OTA send).
+See its README.
 
 ### Pattern notation
 
@@ -112,9 +155,11 @@ nodes run uniform `WIFI_AP_STA`.
 
 ## Conventions / gotchas
 
-- `OBJ_ID`, `LED_PIN`, `SOL_PIN`, `TEST_PECK`, etc. are compile-time `build_flags` in
-  `platformio.ini`, not runtime config — changing a node's behavior usually means editing
-  its env there.
+- `OBJ_ID` is **runtime** (NVS via `EcosystemIdentity`, seeded by the `devN`
+  provisioning envs); per-object hardware tuning lives in `src/NodeConfig.h`.
+  `LED_PIN`, `SOL_PIN`, `TEST_PECK`, `USE_FS_LITTLEFS`, etc. remain compile-time
+  `build_flags` in `platformio.ini`. Don't reintroduce per-node `-D` constants —
+  they'd break the single-image OTA model.
 - Logging uses ESP-IDF macros (`ESP_LOGI/D/E`) with per-file `TAG`s; verbosity is set by
   `-DCORE_DEBUG_LEVEL` in the env.
 - `.pio/` is downloaded dependencies (painlessMesh, ArduinoJson, CNMAT OSC, osc_control,

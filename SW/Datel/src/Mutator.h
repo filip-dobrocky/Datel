@@ -103,7 +103,7 @@ private:
     int i = random_of_type(STEP_REST);
     if (i < 0) return;
     buffer[i].type = STEP_HIT;
-    buffer[i].velocity = HIT_AMP_DEFAULT;
+    buffer[i].velocity = g_hit_amp_default;
   }
 
   void remove_hit() {
@@ -198,7 +198,7 @@ private:
   void sanitize() {
     if (buf_len == 0) {
       buffer[0].type = STEP_HIT;
-      buffer[0].velocity = HIT_AMP_DEFAULT;
+      buffer[0].velocity = g_hit_amp_default;
       buf_len = 1;
       return;
     }
@@ -207,7 +207,7 @@ private:
       if (buffer[i].type != STEP_REST) return;
     uint8_t i = random(buf_len);
     buffer[i].type = STEP_HIT;
-    buffer[i].velocity = HIT_AMP_DEFAULT;
+    buffer[i].velocity = g_hit_amp_default;
   }
 
   Step buffer[MAX_STEPS];

@@ -48,6 +48,15 @@
 #define PECK_FREQ_MIN 5
 #define PECK_FREQ_MAX 20
 
+// ---- Runtime amplitude tuning (per-object; see NodeConfig.h) ----
+// One firmware image serves all nodes, so per-solenoid amp floors/defaults are
+// runtime variables, initialized from the compile-time defaults above and
+// overridden in setup() once the NVS object id is known.
+inline uint8_t g_hit_amp_min      = HIT_AMP_MIN;
+inline uint8_t g_peck_amp_min     = PECK_AMP_MIN;
+inline uint8_t g_hit_amp_default  = HIT_AMP_DEFAULT;
+inline uint8_t g_peck_amp_default = PECK_AMP_DEFAULT;
+
 enum StepType : uint8_t { STEP_REST = 0, STEP_HIT = 1, STEP_PECK = 2 };
 
 struct Step {
@@ -60,8 +69,8 @@ struct Step {
 };
 
 // ---- Clamp helpers (used on decode and on mutation) ----
-inline uint8_t clampHitVel(int v)  { if (v < HIT_AMP_MIN)  v = HIT_AMP_MIN;  if (v > 255) v = 255; return (uint8_t)v; }
-inline uint8_t clampPeckAmp(int a) { if (a < PECK_AMP_MIN) a = PECK_AMP_MIN; if (a > 255) a = 255; return (uint8_t)a; }
+inline uint8_t clampHitVel(int v)  { if (v < g_hit_amp_min)  v = g_hit_amp_min;  if (v > 255) v = 255; return (uint8_t)v; }
+inline uint8_t clampPeckAmp(int a) { if (a < g_peck_amp_min) a = g_peck_amp_min; if (a > 255) a = 255; return (uint8_t)a; }
 inline uint8_t clampFreq(int f)    { if (f < PECK_FREQ_MIN) f = PECK_FREQ_MIN; if (f > PECK_FREQ_MAX) f = PECK_FREQ_MAX; return (uint8_t)f; }
 inline uint8_t clampDur(int d)     { if (d < 1) d = 1; if (d > 16) d = 16; return (uint8_t)d; }
 inline int8_t  clampCurve(int c)   { if (c < -10) c = -10; if (c > 10) c = 10; return (int8_t)c; }
@@ -80,11 +89,11 @@ inline char hexDigit(uint8_t v) { return "0123456789ABCDEF"[v & 0x0F]; }
 inline Step makeDefaultPeck() {
     Step st;
     st.type     = STEP_PECK;
-    st.velocity = HIT_AMP_DEFAULT;
+    st.velocity = g_hit_amp_default;
     st.freq     = PECK_FREQ_DEFAULT;
     st.dur      = PECK_DUR_DEFAULT;
     st.curve    = PECK_CURVE_DEFAULT;
-    st.amp      = PECK_AMP_DEFAULT;
+    st.amp      = g_peck_amp_default;
     return st;
 }
 
@@ -108,7 +117,7 @@ inline uint8_t parsePattern(const String &s, Step *out, uint8_t maxSteps) {
                 st.velocity = clampHitVel((hexVal(s[i]) << 4) | hexVal(s[i + 1]));
                 i += 2;
             } else {
-                st.velocity = HIT_AMP_DEFAULT;
+                st.velocity = g_hit_amp_default;
             }
             count++;
         } else if (c == 'p' || c == 'P') {
@@ -148,7 +157,7 @@ inline String serializePattern(const Step *steps, uint8_t count) {
             s += '_';
         } else if (st.type == STEP_HIT) {
             s += 'x';
-            if (st.velocity != HIT_AMP_DEFAULT) {
+            if (st.velocity != g_hit_amp_default) {
                 s += hexDigit(st.velocity >> 4);
                 s += hexDigit(st.velocity & 0x0F);
             }
