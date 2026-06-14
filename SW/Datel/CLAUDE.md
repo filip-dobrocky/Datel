@@ -135,7 +135,8 @@ firmware cannot parse `p…`/`xHH` tokens (plain `x_` strings still parse on bot
 Nodes broadcast JSON over painlessMesh; every message has a `"type"` field, routed by
 `EcosystemNode` to the handler registered with `eco.onMessage(type, ...)`. Types:
 `knocking`, `knocked`, `tweeting`, `tweeted`, `pause`, `ping`, `suspended`, `battery`,
-`velocity`.
+`velocity`, `auto`, `listen`, `pattern`, `peck`, `blinking`, `density`, `tempo`,
+`tempoRand`, `reset`.
 
 Behavioral flow: when a node knocks it broadcasts `knocking` (with `pattern`, `dna`,
 `tempo`); receivers mutate the pattern, random-walk the tempo (clamped 60-500), and
@@ -146,8 +147,14 @@ mutation).
 
 ### OSC bridge (every node, no privileged root)
 
-Any node receives OSC (`/pause`, `/velocity`) and rebroadcasts the change to the mesh,
-so an external controller can attach to *any* node's softAP and drive the swarm.
+Any node receives OSC and rebroadcasts the change to the mesh, so an external controller
+can attach to *any* node's softAP and drive the swarm. Global (non-id-targeted) commands:
+`/pause 0|1`, `/velocity 0..1`, `/auto 0|1`, `/blinking 0|1` (LED blink while paused / low
+battery, default on), `/density 0..1` (scales idle + suspend times; `0` = current/sparsest
+default, `1` = 500 ms floor/densest), `/tempo <bpm>` (60-500), `/tempoRand 0|1` (per-knock
+tempo random-walk, default on; off locks each node to its own tempo), `/reset` (pattern +
+tempo back to defaults). Id-targeted commands carry an id first arg: `/listen <id> 0|1`,
+`/pattern <id> <str>`, `/peck <id> <freq> <dur> <curve> [amp]`.
 Telemetry (`/ping`, `/suspended`, `/battery`) is emitted via `eco.forwardOsc()` to the
 node's **own softAP-directed broadcast** (`10.x.y.255`) — whichever node the controller
 is connected to delivers it. There is no special OSC "root": one node is still the

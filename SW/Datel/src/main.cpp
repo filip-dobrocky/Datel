@@ -27,7 +27,7 @@
 // Bump for every OTA release. Travels in the mesh "ping" and the /info/ping
 // OSC telemetry, so the controller can watch each node flip to the new
 // version as the swarm updates (old pre-versioning firmware reports 0).
-#define FW_VERSION 1
+#define FW_VERSION 2
 
 const char *TAG = "Datel";
 
@@ -50,6 +50,11 @@ static const uint32_t SUSPEND_SHORT = 2000;
 static const uint32_t IDLE_TIMEOUT = 35000;
 SuspendManager suspendMgr(eco.scheduler(), IDLE_TIMEOUT);
 
+// Defaults restored by OSC /reset (also used at setup()).
+static const char    *DEFAULT_PATTERN  = "xx_p750AFF_xx_";
+static const uint16_t DEFAULT_TEMPO    = 300;
+static const uint32_t DENSITY_FLOOR_MS = 500;  // densest = 500 ms
+
 // === Actuator & genetics ===
 Knocker knocker(SOL_PIN);
 Mutator mutator(0);  // DNA re-derived in setup() once the NVS id is known
@@ -62,6 +67,17 @@ OtaDistributor ota(eco.mesh(), eco.scheduler(), "datel");
 // === Control mode ===
 bool g_auto = true;    // global emergence master (informational/log)
 bool g_listen = true;  // this node participates in emergence
+bool g_blinking = true;     // LED blink while paused / low battery
+bool g_tempo_rand = true;   // per-knock tempo random walk
+float g_density = 0.0f;      // 0 = current (sparsest) .. 1 = floor (500 ms, densest)
+
+// density 0 -> ms (as-is, sparsest), density 1 -> DENSITY_FLOOR_MS (densest).
+// Never below the floor.
+static uint32_t scaleByDensity(uint32_t ms) {
+    if (ms <= DENSITY_FLOOR_MS) return ms;
+    return DENSITY_FLOOR_MS +
+           (uint32_t)lroundf((ms - DENSITY_FLOOR_MS) * (1.0f - g_density));
+}
 
 // === Function Prototypes ===
 void send_knocking();
@@ -76,8 +92,14 @@ void osc_auto_received(OSCMessage &m);
 void osc_listen_received(OSCMessage &m);
 void osc_pattern_received(OSCMessage &m);
 void osc_peck_received(OSCMessage &m);
+void osc_blinking_received(OSCMessage &m);
+void osc_density_received(OSCMessage &m);
+void osc_tempo_received(OSCMessage &m);
+void osc_tempo_rand_received(OSCMessage &m);
+void osc_reset_received(OSCMessage &m);
 
 void set_listen(bool v);
+void set_blinking(bool v);
 void apply_listen(int id, int v);
 void apply_pattern(int id, const char *pat);
 void apply_peck(int id, float freq, float dur_ms, float curve, float amp_norm);
@@ -118,35 +140,41 @@ static void on_knocking(JsonDocument &doc, uint32_t /*from*/) {
                  sender_tempo);
         mutate_pattern(pattern, sender_dna);
 
-        // Random walk the tempo by +/-10..80, clamped 60..500
-        int tempo_change = random(1, 9) * 10;
-        if (random(0, 2) == 0) tempo_change = -tempo_change;
-        int new_tempo = constrain(sender_tempo + tempo_change, 60, 500);
-        knocker.setTempo(new_tempo);
-        ESP_LOGI(TAG, "Tempo adjusted: %d -> %d (change: %+d)", sender_tempo,
-                 new_tempo, tempo_change);
+        if (g_tempo_rand) {
+            // Random walk the tempo by +/-10..80, clamped 60..500
+            int tempo_change = random(1, 9) * 10;
+            if (random(0, 2) == 0) tempo_change = -tempo_change;
+            int new_tempo = constrain(sender_tempo + tempo_change, 60, 500);
+            knocker.setTempo(new_tempo);
+            ESP_LOGI(TAG, "Tempo adjusted: %d -> %d (change: %+d)", sender_tempo,
+                     new_tempo, tempo_change);
+        }
     }
 
-    suspendMgr.setSuspended(true, SUSPEND_SHORT);
+    suspendMgr.setSuspended(true, scaleByDensity(SUSPEND_SHORT));
 }
 
 static void on_knocked(JsonDocument & /*doc*/, uint32_t /*from*/) {
     if (g_listen && suspendMgr.active()) knocker.knock();
 }
 
+// TODO: generalize reaction to other species and move to Ecosystem base
 static void on_tweeting(JsonDocument &doc, uint32_t /*from*/) {
     if (!g_listen) return;
 
     int sender_tempo = doc["tempo"] | 400;
 
     // birb variant: random subdivision (pattern ignored), random-walk tempo
-    int tempo_change = random(1, 9) * 10;
-    if (random(0, 2) == 0) tempo_change = -tempo_change;
-    int new_tempo = constrain(sender_tempo + tempo_change, 60, 500);
-    knocker.setTempo(new_tempo);
-    ESP_LOGI(TAG, "Tempo adjusted (tweeting): %d -> %d", sender_tempo, new_tempo);
+    if (g_tempo_rand) {
+        int tempo_change = random(1, 9) * 10;
+        if (random(0, 2) == 0) tempo_change = -tempo_change;
+        int new_tempo = constrain(sender_tempo + tempo_change, 60, 500);
+        knocker.setTempo(new_tempo);
+        ESP_LOGI(TAG, "Tempo adjusted (tweeting): %d -> %d", sender_tempo,
+                 new_tempo);
+    }
 
-    suspendMgr.setSuspended(true, SUSPEND_SHORT);
+    suspendMgr.setSuspended(true, scaleByDensity(SUSPEND_SHORT));
 }
 
 static void on_tweeted(JsonDocument & /*doc*/, uint32_t /*from*/) {
@@ -215,6 +243,33 @@ static void on_peck(JsonDocument &doc, uint32_t /*from*/) {
                doc["curve"] | 0.0f, doc["amp"] | 1.0f);
 }
 
+static void on_blinking(JsonDocument &doc, uint32_t /*from*/) {
+    set_blinking((doc["state"] | 1) != 0);
+    ESP_LOGI(TAG, "Mesh blinking: %d", (int)g_blinking);
+}
+
+static void on_density(JsonDocument &doc, uint32_t /*from*/) {
+    g_density = constrain((float)(doc["value"] | 0.0f), 0.0f, 1.0f);
+    ESP_LOGI(TAG, "Mesh density: %.3f", g_density);
+}
+
+static void on_tempo(JsonDocument &doc, uint32_t /*from*/) {
+    int bpm = constrain((int)(doc["bpm"] | DEFAULT_TEMPO), 60, 500);
+    knocker.setTempo(bpm);
+    ESP_LOGI(TAG, "Mesh tempo: %d", bpm);
+}
+
+static void on_tempo_rand(JsonDocument &doc, uint32_t /*from*/) {
+    g_tempo_rand = (doc["state"] | 1) != 0;
+    ESP_LOGI(TAG, "Mesh tempoRand: %d", (int)g_tempo_rand);
+}
+
+static void on_reset(JsonDocument & /*doc*/, uint32_t /*from*/) {
+    knocker.setPattern(DEFAULT_PATTERN);
+    knocker.setTempo(DEFAULT_TEMPO);
+    ESP_LOGI(TAG, "Mesh reset: pattern + tempo to defaults");
+}
+
 // === Setup & Loop ===
 void setup() {
     pinMode(LED_PIN, OUTPUT);
@@ -258,6 +313,11 @@ void setup() {
     eco.onMessage("listen", on_listen);
     eco.onMessage("pattern", on_pattern);
     eco.onMessage("peck", on_peck);
+    eco.onMessage("blinking", on_blinking);
+    eco.onMessage("density", on_density);
+    eco.onMessage("tempo", on_tempo);
+    eco.onMessage("tempoRand", on_tempo_rand);
+    eco.onMessage("reset", on_reset);
 
     eco.onOsc("/pause", osc_pause_received);
     eco.onOsc("/velocity", osc_velocity_received);
@@ -265,6 +325,11 @@ void setup() {
     eco.onOsc("/listen", osc_listen_received);
     eco.onOsc("/pattern", osc_pattern_received);
     eco.onOsc("/peck", osc_peck_received);
+    eco.onOsc("/blinking", osc_blinking_received);
+    eco.onOsc("/density", osc_density_received);
+    eco.onOsc("/tempo", osc_tempo_received);
+    eco.onOsc("/tempoRand", osc_tempo_rand_received);
+    eco.onOsc("/reset", osc_reset_received);
 
     eco.begin(WIFI_SSID, WIFI_PASS);
 
@@ -288,9 +353,9 @@ void setup() {
                            /*period_ms=*/2000, /*rest_lit=*/false);
 
     // === Knocker ===
-    knocker.setTempo(300);
+    knocker.setTempo(DEFAULT_TEMPO);
     // Steps: 2 hits, rest, peck(freq 12Hz, dur 6, curve 0, amp 255), rest, 2 hits, rest
-    knocker.setPattern("xx_p750AFF_xx_");
+    knocker.setPattern(DEFAULT_PATTERN);
 
     knocker.setOnStarted([]() {
         ESP_LOGI(TAG, "Knocking started");
@@ -300,8 +365,8 @@ void setup() {
 
     knocker.setOnFinished([]() {
         ESP_LOGI(TAG, "Knocking finished");
-        suspendMgr.pokeIdle(45000UL);
-        suspendMgr.setSuspended(true, SUSPEND_LONG);
+        suspendMgr.pokeIdle(scaleByDensity(45000UL));
+        suspendMgr.setSuspended(true, scaleByDensity(SUSPEND_LONG));
         send_knocked();
         knocking = false;
     });
@@ -473,12 +538,66 @@ void osc_peck_received(OSCMessage &m) {
              freq, dur, curve, amp);
 }
 
+void osc_blinking_received(OSCMessage &m) {
+    if (m.size() == 0) return;
+    int v = m.getInt(0);
+    set_blinking(v != 0);
+    eco.broadcast("blinking", [v](JsonDocument &d) { d["state"] = v; });
+    ESP_LOGI(TAG, "OSC blinking: %d (broadcast to mesh)", v);
+}
+
+void osc_density_received(OSCMessage &m) {
+    if (m.size() == 0) return;
+    float v = m.getFloat(0);
+    if (isnan(v)) v = (float)m.getInt(0);
+    v = constrain(v, 0.0f, 1.0f);
+    g_density = v;
+    eco.broadcast("density", [v](JsonDocument &d) { d["value"] = v; });
+    ESP_LOGI(TAG, "OSC density: %.3f (broadcast to mesh)", v);
+}
+
+void osc_tempo_received(OSCMessage &m) {
+    if (m.size() == 0) return;
+    float f = m.getFloat(0);
+    int bpm = isnan(f) ? m.getInt(0) : (int)roundf(f);
+    bpm = constrain(bpm, 60, 500);
+    knocker.setTempo(bpm);
+    eco.broadcast("tempo", [bpm](JsonDocument &d) { d["bpm"] = bpm; });
+    ESP_LOGI(TAG, "OSC tempo: %d (broadcast to mesh)", bpm);
+}
+
+void osc_tempo_rand_received(OSCMessage &m) {
+    if (m.size() == 0) return;
+    int v = m.getInt(0);
+    g_tempo_rand = (v != 0);
+    eco.broadcast("tempoRand", [v](JsonDocument &d) { d["state"] = v; });
+    ESP_LOGI(TAG, "OSC tempoRand: %d (broadcast to mesh)", v);
+}
+
+void osc_reset_received(OSCMessage & /*m*/) {
+    knocker.setPattern(DEFAULT_PATTERN);
+    knocker.setTempo(DEFAULT_TEMPO);
+    eco.broadcast("reset");
+    ESP_LOGI(TAG, "OSC reset: pattern + tempo to defaults (broadcast to mesh)");
+}
+
 // === Helpers ===
 void set_listen(bool v) {
     g_listen = v;
-    if (v) suspendMgr.pokeIdle(IDLE_TIMEOUT);  // re-arm idle self-trigger
+    if (v) suspendMgr.pokeIdle(scaleByDensity(IDLE_TIMEOUT));  // re-arm idle self-trigger
     else suspendMgr.cancelIdle();              // stop self-triggering when quiet
     ESP_LOGI(TAG, "Listen: %d", v);
+}
+
+void set_blinking(bool v) {
+    g_blinking = v;
+    suspendMgr.setPauseLedEnabled(v);  // pause-LED blink
+    if (!v) {                          // turn the low-battery blink off now
+        t_low_battery_indication.disable();
+        if (!suspendMgr.isPaused()) digitalWrite(LED_PIN, HIGH);  // active-low: off
+    } else {
+        measure_battery();             // re-evaluate low-battery indicator now
+    }
 }
 
 void apply_listen(int id, int v) {
@@ -516,7 +635,7 @@ void measure_battery() {
     ESP_LOGI(TAG, "Battery: %.2f V", battery_voltage);
 
     // While paused, SuspendManager owns the LED (pause blink) -- don't fight it.
-    if (battery_voltage < 3.3f && !suspendMgr.isPaused()) {
+    if (battery_voltage < 3.3f && !suspendMgr.isPaused() && g_blinking) {
         t_low_battery_indication.enable();
     } else {
         t_low_battery_indication.disable();
