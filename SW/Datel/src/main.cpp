@@ -27,7 +27,7 @@
 // Bump for every OTA release. Travels in the mesh "ping" and the /info/ping
 // OSC telemetry, so the controller can watch each node flip to the new
 // version as the swarm updates (old pre-versioning firmware reports 0).
-#define FW_VERSION 2
+#define FW_VERSION 6
 
 const char *TAG = "Datel";
 
@@ -293,7 +293,7 @@ void setup() {
 
     // Per-object hardware tuning (must run before the first setPattern/parse).
     NodeConfig node_cfg = nodeConfigFor(g_obj_id);
-    knocker.setOffTimeScale(node_cfg.knocker_off_time_scale);
+    knocker.setOffTimeMax(node_cfg.knocker_off_time_max);
     g_hit_amp_min      = node_cfg.hit_amp_min;
     g_peck_amp_min     = node_cfg.peck_amp_min;
     g_hit_amp_default  = node_cfg.hit_amp_default;

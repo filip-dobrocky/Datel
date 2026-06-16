@@ -17,8 +17,8 @@
 // =====================================================================
 
 struct NodeConfig {
-    // Solenoid off-time divisor (Knocker::calc_off_time).
-    uint32_t knocker_off_time_scale;
+    // Solenoid max windup in ms at full velocity (Knocker::calc_off_time).
+    uint32_t knocker_off_time_max;
     // Amplitude floors/defaults (Pattern.h g_* runtime tuning).
     uint8_t hit_amp_min;       // floor for hit velocity (audible solenoid)
     uint8_t peck_amp_min;      // floor for peck amplitude
@@ -27,13 +27,13 @@ struct NodeConfig {
 };
 
 inline NodeConfig nodeConfigFor(int id) {
-    NodeConfig cfg{500, HIT_AMP_MIN, PECK_AMP_MIN, HIT_AMP_DEFAULT,
+    NodeConfig cfg{50, HIT_AMP_MIN, PECK_AMP_MIN, HIT_AMP_DEFAULT,
                    PECK_AMP_DEFAULT};
     switch (id) {
         case 7:
         case 10:
-            // Different solenoid hardware: needs a longer off time.
-            cfg.knocker_off_time_scale = 250;
+            // Different solenoid hardware: needs a longer windup.
+            // cfg.knocker_off_time_max = 80;
             break;
     }
     return cfg;

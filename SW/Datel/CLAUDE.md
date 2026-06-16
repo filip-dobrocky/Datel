@@ -77,7 +77,7 @@ Project-local files (`src/`):
   handlers (`eco.onOsc`), then `eco.begin()` + `ota.begin()`. `loop()` pumps
   `eco.update()` (mesh + OSC), `knocker.update()` and `ota.update()`.
 - **`NodeConfig.h`** — per-object **hardware** constants keyed by the runtime id:
-  `knocker_off_time_scale` (250 for objects 7 and 10, 500 default) plus the
+  `knocker_off_time_max` (max windup in ms; 80 for objects 7 and 10, 50 default) plus the
   amplitude tuning `hit_amp_min` / `peck_amp_min` / `hit_amp_default` /
   `peck_amp_default` (applied to Pattern.h's `g_*` runtime variables). Only
   per-hardware tuning belongs here; structural constants every node must agree
@@ -93,11 +93,19 @@ Project-local files (`src/`):
   compile-time.
 - **`Knocker.h`** — drives the solenoid via PWM (`analogWrite`, 20 kHz). Parses the
   pattern string into `Step[]` and plays it at a tempo (one rest/hit per 16th-note; a peck
-  occupies `dur` steps). Each hit plays its own velocity — there is **no** running decay;
-  dynamics live in the pattern. `setVelocity()` (driven by OSC/mesh `velocity`) is a
-  **master gain** scaling every hit/peck. Uses its own `TaskScheduler`
-  (`t_knock`/`t_off`/`t_peck`); `peck()` fires rapid envelope-shaped hits and, while
-  ringing, owns the pin (the knock loop gates on `t_peck.isEnabled()`, ring-over allowed).
+  occupies `dur` steps). The solenoid touches the wood with its spring side: energizing it
+  retracts (winds up), releasing it knocks — so the **audible knock is the release**, not
+  the energize. Each step is therefore *charged* `windup`-ms **before** its beat (`t_knock`
+  pre-fires; `calc_windup`) so the release (`t_off`) lands exactly on the beat — the beat
+  grid is anchored to the knock, keeping rhythm tight even as the windup varies. Loudness
+  comes from **PWM duty** (velocity sets retraction force = how hard it knocks); velocity
+  also scales the windup, which is capped at a fraction (`KNOCKER_OFF_TIME_FRAC`) of the
+  step interval so high tempos stay articulated and the pre-charge fits before the beat.
+  Each hit plays its own velocity — there is **no** running decay; dynamics live in the
+  pattern. `setVelocity()` (driven by OSC/mesh `velocity`) is a **master gain** scaling
+  every hit/peck. Uses its own `TaskScheduler` (`t_knock`/`t_off`/`t_peck`); `peck()` fires
+  rapid envelope-shaped hits and, while ringing, owns the pin (the knock loop gates on
+  `t_peck.isEnabled()`, ring-over allowed).
   Singleton via `Knocker::instance` because TaskScheduler callbacks must be static.
 - **`Mutator.h`** — genetic mutation of patterns, subclassing the library's `MutatorBase`,
   operating on `Step[]`. Genes `A`-`G` are the rhythm operators (add/remove hit, burst
