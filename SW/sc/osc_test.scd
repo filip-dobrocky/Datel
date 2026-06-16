@@ -64,6 +64,23 @@ Evaluate the block below once, then call the ~helpers or run the demo at the bot
 // master gain for every hit/peck, 0..1.
 ~velocity = { |v = 1| ~node.sendMsg("/datel/velocity", v.asFloat) };
 
+// enable(1)/disable(0) the LED blink while paused / low battery (default on).
+~blinking = { |on = 1| ~node.sendMsg("/datel/blinking", on.asInteger) };
+
+// overall activity density 0..1: scales the idle + suspend times.
+//   0 = current values (sparsest, default), 1 = 500 ms floor (densest).
+~density = { |d = 0| ~node.sendMsg("/datel/density", d.asFloat) };
+
+// set the knock tempo in BPM (clamped 60..500) across the swarm.
+~tempo = { |bpm = 300| ~node.sendMsg("/datel/tempo", bpm.asFloat) };
+
+// enable(1)/disable(0) the per-knock tempo random-walk (default on).
+// off => each node locks to its own tempo (pair with ~tempo to hold one BPM).
+~tempoRand = { |on = 1| ~node.sendMsg("/datel/tempoRand", on.asInteger) };
+
+// reset pattern + tempo back to firmware defaults on every node.
+~reset = { ~node.sendMsg("/datel/reset") };
+
 // --- telemetry listeners (node -> here, on port 54355) ---------------------
 thisProcess.openUDPPort(54355);
 
@@ -90,7 +107,7 @@ OSCdef(\suspended, { |msg, time, addr|
 
 ~auto.(0);                 // freeze the swarm (manual mode)
 ~listen.(11, 1);            // re-enable emergence on node 11 only
-~pattern.(4, "xx_xx_");    // node 4 plays this now
+~pattern.(5, "xx_xx_");    // node 4 plays this now
 ~pattern.(4, "x0fxffxxxf0xxx________xf0x____x_x");    // node 4 plays this now
 ~pattern.(11, "xx_p750AFF_xx_"); // hits + a peck
 ~peck.(4, 10, 20000, -2, 1.0);   // node 4: single 2 s peck, fade in
@@ -100,15 +117,24 @@ OSCdef(\suspended, { |msg, time, addr|
 ~pause.(0);                // resume
 ~auto.(1);                 // back to autonomous emergent behaviour
 
+~tempoRand.(0);            // lock tempo (stop the per-knock random walk)
+~tempo.(400);              // hold the whole swarm at 120 BPM
+~tempoRand.(1);            // resume tempo drift
+~density.(1);              // densest (500 ms floor)
+~density.(0);              // back to sparsest (default)
+~blinking.(0);             // LED dark while paused / low battery
+~blinking.(1);             // LED blink back on
+~reset.();                 // pattern + tempo to firmware defaults
+
 // ---------------------------------------------------------------------------
-// Demo routine: manual mode, walk a peck across nodes 0..11.
+// Demo routine: manual mode, walk a peck across nodes 0..10.
 // ---------------------------------------------------------------------------
 (
 Routine({
 	~auto.(0);
 	0.5.wait;
-	(0..11).do { |id|
-		~peck.(id, rrand(6, 18), 1500, rrand(-8, 8), 1.0);
+	(0..10).do { |id|
+		~peck.(id, rrand(15, 20), 1500, rrand(-8, 8), 1.0);
 		0.6.wait;
 	};
 	1.0.wait;

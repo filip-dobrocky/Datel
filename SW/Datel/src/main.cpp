@@ -548,8 +548,7 @@ void osc_blinking_received(OSCMessage &m) {
 
 void osc_density_received(OSCMessage &m) {
     if (m.size() == 0) return;
-    float v = m.getFloat(0);
-    if (isnan(v)) v = (float)m.getInt(0);
+    float v = m.isInt(0) ? (float)m.getInt(0) : m.getFloat(0);
     v = constrain(v, 0.0f, 1.0f);
     g_density = v;
     eco.broadcast("density", [v](JsonDocument &d) { d["value"] = v; });
@@ -558,8 +557,9 @@ void osc_density_received(OSCMessage &m) {
 
 void osc_tempo_received(OSCMessage &m) {
     if (m.size() == 0) return;
-    float f = m.getFloat(0);
-    int bpm = isnan(f) ? m.getInt(0) : (int)roundf(f);
+    // getFloat() on a non-float arg returns -1 on ESP (not NaN), so branch on
+    // the actual OSC type: the SC helper sends tempo as an int.
+    int bpm = m.isFloat(0) ? (int)roundf(m.getFloat(0)) : m.getInt(0);
     bpm = constrain(bpm, 60, 500);
     knocker.setTempo(bpm);
     eco.broadcast("tempo", [bpm](JsonDocument &d) { d["bpm"] = bpm; });
