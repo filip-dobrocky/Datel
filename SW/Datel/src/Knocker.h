@@ -14,6 +14,9 @@
 #ifndef KNOCKER_OFF_TIME_FRAC
 #define KNOCKER_OFF_TIME_FRAC 0.5f  // windup capped at this fraction of the interval
 #endif
+#ifndef PECK_ATTACK
+#define PECK_ATTACK 0.1f            // peck attack as a fraction of peck time (decay = 1 - this)
+#endif
 
 const char* KNOCK_TAG = "Knocker";
 
@@ -185,13 +188,25 @@ private:
     static void peck_callback() {
         uint32_t n = instance->peck_total;
         uint32_t i = instance->peck_step;
-        float t = (n > 1) ? (float)i / (float)(n - 1) : 1.0f;
-        float c = instance->peck_curve;
 
+        // Attack/decay envelope: rises over the first PECK_ATTACK of the peck,
+        // falls over the remainder. `curve` bends the linearity of both segments
+        // via a shaping exponent (0 = linear; >0 = ease-in/convex; <0 =
+        // ease-out/concave).
         float env;
-        if (c == 0.0f)     env = 1.0f;
-        else if (c > 0.0f) env = powf(t, c);
-        else               env = powf(1.0f - t, -c);
+        if (n <= 1) {
+            env = 1.0f;
+        } else {
+            float t = (float)i / (float)(n - 1);        // 0..1 across the peck
+            float p = powf(10.0f, instance->peck_curve / 10.0f); // curve -> exponent (0.1..10)
+            if (t <= PECK_ATTACK) {
+                float ta = t / PECK_ATTACK;             // 0..1 rising
+                env = powf(ta, p);
+            } else {
+                float td = (t - PECK_ATTACK) / (1.0f - PECK_ATTACK);  // 0..1 falling
+                env = powf(1.0f - td, p);
+            }
+        }
 
         uint8_t eff = (uint8_t)(instance->peck_amp * env);
         uint32_t windup = calc_windup(eff, instance->peck_interval);
