@@ -294,6 +294,7 @@ void setup() {
     // Per-object hardware tuning (must run before the first setPattern/parse).
     NodeConfig node_cfg = nodeConfigFor(g_obj_id);
     knocker.setOffTimeMax(node_cfg.knocker_off_time_max);
+    knocker.setOffTimeFrac(node_cfg.knocker_off_time_frac);
     g_hit_amp_min      = node_cfg.hit_amp_min;
     g_peck_amp_min     = node_cfg.peck_amp_min;
     g_hit_amp_default  = node_cfg.hit_amp_default;

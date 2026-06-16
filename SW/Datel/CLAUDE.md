@@ -77,7 +77,9 @@ Project-local files (`src/`):
   handlers (`eco.onOsc`), then `eco.begin()` + `ota.begin()`. `loop()` pumps
   `eco.update()` (mesh + OSC), `knocker.update()` and `ota.update()`.
 - **`NodeConfig.h`** — per-object **hardware** constants keyed by the runtime id:
-  `knocker_off_time_max` (max windup in ms; 80 for objects 7 and 10, 50 default) plus the
+  `knocker_off_time_max` (max windup in ms; 50 default) and `knocker_off_time_frac`
+  (windup ceiling as a fraction of the step interval — the lever that bounds windup at high
+  frequency; 0.3 for the sticky solenoids 0/1/4, 0.5 default) plus the
   amplitude tuning `hit_amp_min` / `peck_amp_min` / `hit_amp_default` /
   `peck_amp_default` (applied to Pattern.h's `g_*` runtime variables). Only
   per-hardware tuning belongs here; structural constants every node must agree

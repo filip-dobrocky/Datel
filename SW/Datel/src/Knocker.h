@@ -86,6 +86,13 @@ public:
         off_time_max = ms;
     };
 
+    // Windup ceiling as a fraction of the step/sub-hit interval. Lower it for
+    // solenoids that stick at high frequency (the ms cap above doesn't bind
+    // there; this fraction does — it guarantees more release/recovery time).
+    void setOffTimeFrac(float f) {
+        off_time_frac = f;
+    };
+
     uint16_t getTempo() const {
         return tempo;
     };
@@ -111,7 +118,7 @@ private:
         if (eff_vel == 0) return 0;                 // silent: caller skips the knock
         uint32_t range = instance->off_time_max - KNOCKER_OFF_TIME_MIN;
         uint32_t t = KNOCKER_OFF_TIME_MIN + range * eff_vel / 255;  // velocity -> windup
-        uint32_t cap = (uint32_t)(cap_interval * KNOCKER_OFF_TIME_FRAC);
+        uint32_t cap = (uint32_t)(cap_interval * instance->off_time_frac);
         return min(t, cap);
     }
 
@@ -236,6 +243,7 @@ private:
     uint8_t pin;
     uint16_t tempo;
     uint32_t off_time_max = KNOCKER_OFF_TIME_MAX;
+    float    off_time_frac = KNOCKER_OFF_TIME_FRAC;
 
     uint8_t velocity = 255;  // master gain applied to every hit/peck (0..255)
 

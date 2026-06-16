@@ -78,6 +78,10 @@ Evaluate the block below once, then call the ~helpers or run the demo at the bot
 // off => each node locks to its own tempo (pair with ~tempo to hold one BPM).
 ~tempoRand = { |on = 1| ~node.sendMsg("/datel/tempoRand", on.asInteger) };
 
+// enable(1)/disable(0) sustain: hold the solenoid energized after a finished
+// knock (basic knock = quick on/off; sustained = on/off/on-and-held). default off.
+~sustain = { |on = 1| ~node.sendMsg("/datel/sustain", on.asInteger) };
+
 // reset pattern + tempo back to firmware defaults on every node.
 ~reset = { ~node.sendMsg("/datel/reset") };
 
@@ -107,23 +111,25 @@ OSCdef(\suspended, { |msg, time, addr|
 
 ~auto.(0);                 // freeze the swarm (manual mode)
 ~listen.(11, 1);            // re-enable emergence on node 11 only
-~pattern.(5, "xx_xx_");    // node 4 plays this now
-~pattern.(4, "x0fxffxxxf0xxx________xf0x____x_x");    // node 4 plays this now
-~pattern.(11, "xx_p750AFF_xx_"); // hits + a peck
-~peck.(4, 10, 20000, -2, 1.0);   // node 4: single 2 s peck, fade in
-~peck.(11, 16, 5000, -3, 1.0);     // node 11: softer peck
+~pattern.(3, "x04x01____xx_");    // node 4 plays this now
+~pattern.(3, "x0fxffxxxf0xxx________xf0x____x_x");    // node 4 plays this now
+~pattern.(3, "xx_p750AFF_xx_"); // hits + a peck
+~peck.(3, 16, 20000, 10, 1.0);   // node 4: single 2 s peck, fade in
+~peck.(3, 20, 5000, 1, 1.0);     // node 11: softer peck
 ~velocity.(1);           // half master gain
 ~pause.(1);                // silence everything (manual cmds ignored too)
 ~pause.(0);                // resume
 ~auto.(1);                 // back to autonomous emergent behaviour
 
 ~tempoRand.(0);            // lock tempo (stop the per-knock random walk)
-~tempo.(400);              // hold the whole swarm at 120 BPM
+~tempo.(30);              // hold the whole swarm at 120 BPM
 ~tempoRand.(1);            // resume tempo drift
 ~density.(1);              // densest (500 ms floor)
 ~density.(0);              // back to sparsest (default)
 ~blinking.(0);             // LED dark while paused / low battery
 ~blinking.(1);             // LED blink back on
+~sustain.(1);              // hold solenoid on after each knock
+~sustain.(0);              // back to quick on/off (default)
 ~reset.();                 // pattern + tempo to firmware defaults
 
 // ---------------------------------------------------------------------------
@@ -134,10 +140,14 @@ Routine({
 	~auto.(0);
 	0.5.wait;
 	(0..10).do { |id|
-		~peck.(id, rrand(15, 20), 1500, rrand(-8, 8), 1.0);
-		0.6.wait;
+		~peck.(id, 16, 1500, 6, 1.0);
+		0.1.wait;
 	};
 	1.0.wait;
-	~auto.(1);          // hand control back to the swarm
+	// ~auto.(1);          // hand control back to the swarm
 }).play(AppClock);
 )
+
+
+
+
