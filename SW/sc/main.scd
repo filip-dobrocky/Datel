@@ -113,6 +113,46 @@ s.waitForBoot({
 	// --- shared tempo clock ------------------------------------------------
 	t = TempoClock(1);
 
+	// ---- node bridge: drive physical nodes from SC ------------------------
+	// c[i] are node ids; pitch of node id = n[id]. (osc.scd's ~peck / ~pattern
+	// are loaded just above.) Low-level wrappers, id arrays:
+	~nodePeck = { |ids, freq = 14, dur = 250, curve = 0, amp = 1|
+		ids.asArray.do { |id| ~peck.(id, freq, dur, curve, amp) };
+	};
+	~nodePat  = { |ids, str = "x"|
+		ids.asArray.do { |id| ~pattern.(id, str) };
+	};
+
+	// pitch -> node id, matched by pitch class (octave-robust), nearest octave.
+	~nodeOf = { |midi|
+		var pc = midi.round.asInteger % 12;
+		var cands = (0 .. n.size - 1).select { |i| n[i] % 12 == pc };
+		cands.isEmpty.if({ nil }, { cands.minItem { |i| (n[i] - midi).abs } });
+	};
+
+	// ~knocker -> a per-event function to plug into ANY Pbind/Pbindef via Pfunc:
+	//   Pbindef(\x, ..., \datel, Pfunc(~knocker.(prob: 0.4)))   // keep it LAST
+	// One OSC action per event: a chord (freq array) knocks all its nodes, a
+	// single note knocks one, a rest knocks nothing. A per-event \knock (0/1)
+	// gates on top of `prob`, so a pattern can sequence which events reach the
+	// swarm (e.g. silence SC with \amp 0 while \knock stays 1 -> node-only reply).
+	//   prob : 0..1 chance an eligible event fires nodes
+	//   dur  : peck length (ms)      mode : \peck (default) or \hit
+	~knocker = { |prob = 1, dur = 200, mode = \peck|
+		{ |ev|
+			var rest = (ev[\type] == \rest) or: { ev[\dur].isRest };
+			var gate = (ev[\knock] ? 1) * prob;
+			(rest.not and: { gate.coin }).if {
+				var freqs = (ev[\freq] ? (ev[\midinote] ? ev[\note]).midicps).asArray;
+				var ids = freqs.collect { |f| ~nodeOf.(f.cpsmidi) }.reject(_.isNil).as(Set).asArray;
+				(mode == \peck).if(
+					{ ~nodePeck.(ids, 14, dur, 0, 1) },
+					{ ~nodePat.(ids, "x") });
+			};
+			ev;   // must never return nil (nil would end the pattern)
+		};
+	};
+
 	"Datel main: server booted, synthdefs + OSC loaded.".postln;
 	1.wait;
 	~auto.(0);                 // freeze the swarm (manual mode)
@@ -137,7 +177,8 @@ s.waitForBoot({
 (
 Pbindef(\test,
 	\freq, Pseq([[n[1], n[3], n[7], n[9]], [n[0], n[3], n[6], n[10]]], inf).midicps,
-	\dur, 0.1
+	\dur, 0.1,
+	\datel, Pfunc(~knocker.(prob: 0.))
 ).play(t)
 )
 
@@ -194,3 +235,59 @@ Pbindef(\test,
 )
 
 Pbindef(\test).stop
+
+
+// ===========================================================================
+// SC <-> physical node interaction (needs ~findNode.() + ~auto.(0)).
+// Drop ~knocker into ANY Pbindef as a Pfunc on a spare key (\datel), placed
+// LAST so \freq/\dur/\amp are resolved when it reads them. One OSC action per
+// event: chord -> all its nodes, note -> one, rest -> none. Per-event \knock
+// (0/1) gates which events reach the swarm. ~auto.(1) lets knocks ripple.
+// ===========================================================================
+
+// bridge smoke test
+~nodePeck.([3], 14, 300);          // node 3 knocks once
+~nodePat.([3, 9, 10], "x");        // nodes 3/9/10 each knock once
+
+t.tempo=4
+
+// DOUBLING — plug into the glitch line; some notes also knock their node.
+// prob keeps the solenoids sane on fast bursts; crank it toward 1 to double all.
+(
+Pbindef(\glitch,
+	\freq, Pn(Plazy({ Pseq(~stutter.(~chord.([10, 13, 9]).flatten, 3, [2, 5])) })).midicps,
+	\dur, Pseq(~rhythm.(6, [3, 8], [1/8, 1/6], [1.5, 2, 3]), inf),
+	\datel, Pfunc(~knocker.(prob: 1))
+).play(t)
+)
+Pbindef(\glitch).stop;
+
+// CALL & RESPONSE — one line, alternating phases: SC burst (knock off, amp up)
+// then node reply (knock on, amp 0 -> SC silent). Tune the Pn run-lengths.
+(
+Pbindef(\cr,
+	\freq,  Pseq(~chord.([0, 3, 3, 1]).flatten, inf).midicps,
+	\dur,   Pseq([Pn(1/8, 8), Pn(1/2, 3)], inf),     // fast call, slower reply
+	\knock, Pseq([Pn(0, 8),   Pn(1, 3)],   inf),
+	\amp,   Pseq([Pn(0.2, 8), Pn(0, 3)],   inf),     // SC silent during the reply
+	\datel, Pfunc(~knocker.(dur: 250))
+).play(t)
+)
+Pbindef(\cr).stop;
+
+// COUNTERPOINT — hocket: each step is EITHER an SC note OR a node knock.
+(
+Pbindef(\cp,
+	\freq,  Pseq(~chord.([3, 10, 7]).flatten, inf).midicps,
+	\dur,   Pseq([1/8, 1/8, 1/4], inf),
+	\knock, Pseq([0, 0, 1], inf),                    // every 3rd step -> node
+	\amp,   Pseq([0.18, 0.18, 0], inf),              // SC silent on the node step
+	\datel, Pfunc(~knocker.(dur: 120))
+).play(t)
+)
+Pbindef(\cp).stop;
+
+// stop everything (panic)
+(
+[\test, \glitch, \cr, \cp].do { |key| Pbindef(key).stop };
+)
