@@ -14,6 +14,7 @@ CC:
     78  peck dur    (ms)
     79  peck curve  (-10..10)
     80  peck amp    (0..1)
+    83  tempo       (drives TempoClock t in bps + OSC swarm tempo in BPM, 1:1)
     84  master level (server volume, as in garden-sc)
 */
 
@@ -57,6 +58,12 @@ MIDIdef.cc(\datelControls, { |val, num|
 	{80} {
 		~peckAmp = val.linlin(0, 127, 0, 1);
 		"peck amp: %".format(~peckAmp.round(1e-3)).postln }
+	{83} {
+		// bps for the TempoClock; BPM (= bps * 60) for the swarm, 1:1.
+		var bps = val.linexp(0, 127, 1, 8.33);   // 60..500 BPM (osc clamps there)
+		t.tempo = bps;
+		~tempo.(bps * 60);
+		"tempo: % bps (% BPM)".format(bps.round(1e-3), (bps * 60).round(0.1)).postln }
 	{84} {
 		scaled = ~midiLvlScale.(val);
 		s.volume.volume = scaled.ampdb;
