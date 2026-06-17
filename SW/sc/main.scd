@@ -104,6 +104,9 @@ s.waitForBoot({
 	};
 
 	// --- SynthDefs ---------------------------------------------------------
+	this.executeFile(~dir +/+ "synthdefs/pluck.scd");
+
+
 	s.sync;
 
 
@@ -115,12 +118,15 @@ s.waitForBoot({
 
 	// ---- node bridge: drive physical nodes from SC ------------------------
 	// c[i] are node ids; pitch of node id = n[id]. (osc.scd's ~peck / ~pattern
-	// are loaded just above.) Low-level wrappers, id arrays:
-	~nodePeck = { |ids, freq = 14, dur = 250, curve = 0, amp = 1|
-		ids.asArray.do { |id| ~peck.(id, freq, dur, curve, amp) };
+	// are loaded just above.) Low-level wrappers, id arrays.
+	// Multi-node sends MUST be spaced: firing several /pattern|/peck back-to-back
+	// floods the node->mesh rebroadcast and all but the first get dropped. Each
+	// call forks on SystemClock so `gap` is in SECONDS wherever it's invoked.
+	~nodePeck = { |ids, freq = 14, dur = 250, curve = 0, amp = 1, gap = 0.05|
+		{ ids.asArray.do { |id| ~peck.(id, freq, dur, curve, amp); gap.wait } }.fork(SystemClock);
 	};
-	~nodePat  = { |ids, str = "x"|
-		ids.asArray.do { |id| ~pattern.(id, str) };
+	~nodePat  = { |ids, str = "x", gap = 0.05|
+		{ ids.asArray.do { |id| ~pattern.(id, str); gap.wait } }.fork(SystemClock);
 	};
 
 	// pitch -> node id, matched by pitch class (octave-robust), nearest octave.
@@ -138,22 +144,26 @@ s.waitForBoot({
 	// swarm (e.g. silence SC with \amp 0 while \knock stays 1 -> node-only reply).
 	//   prob : 0..1 chance an eligible event fires nodes
 	//   dur  : peck length (ms)      mode : \peck (default) or \hit
-	~knocker = { |prob = 1, dur = 200, mode = \peck|
+	~knocker = { |prob = 1, dur = 200, mode = \peck, peckFreq = 15, peckAmp = 1, pat = "x", amp = 1|
 		{ |ev|
 			var rest = (ev[\type] == \rest) or: { ev[\dur].isRest };
 			var gate = (ev[\knock] ? 1) * prob;
-			(rest.not and: { gate.coin }).if {
-				var freqs = (ev[\freq] ? (ev[\midinote] ? ev[\note]).midicps).asArray;
-				var ids = freqs.collect { |f| ~nodeOf.(f.cpsmidi) }.reject(_.isNil).as(Set).asArray;
+			// ?? is lazy (? would eagerly eval the fallback -> nil.midicps error).
+			var freq = ev[\freq] ?? { ev[\midinote] !? (_.midicps) };
+			(rest.not and: { freq.notNil } and: { gate.coin }).if {
+				var ids = freq.asArray.collect { |f| ~nodeOf.(f.cpsmidi) }.reject(_.isNil).as(Set).asArray;
 				(mode == \peck).if(
-					{ ~nodePeck.(ids, 14, dur, 0, 1) },
-					{ ~nodePat.(ids, "x") });
+					{ ~nodePeck.(ids, peckFreq, dur, 0, amp) },
+					{ ~nodePat.(ids, pat) });
 			};
 			ev;   // must never return nil (nil would end the pattern)
 		};
 	};
 
-	"Datel main: server booted, synthdefs + OSC loaded.".postln;
+	// --- MIDI mapping (notes -> pecks, CC -> peck params + master) ----------
+	this.executeFile(~dir +/+ "midi.scd");
+
+	"Datel main: server booted, synthdefs + OSC + MIDI loaded.".postln;
 	1.wait;
 	~auto.(0);                 // freeze the swarm (manual mode)
 });
@@ -167,7 +177,7 @@ s.waitForBoot({
 ~auto.(0);                 // freeze the swarm (manual mode)
 ~auto.(1);                 // back to autonomous emergent behaviour
 ~pattern.(3, "xx_p750AFF_xx_");
-~peck.(3, 16, 2000, 6, 1.0);
+~peck.(, 16, 2000, 6, 1.0);
 ~tempo.(120);
 ~reset.();
 
@@ -178,7 +188,7 @@ s.waitForBoot({
 Pbindef(\test,
 	\freq, Pseq([[n[1], n[3], n[7], n[9]], [n[0], n[3], n[6], n[10]]], inf).midicps,
 	\dur, 0.1,
-	\datel, Pfunc(~knocker.(prob: 0.))
+	\datel, Pfunc(~knocker.(prob: 0.8))
 ).play(t)
 )
 
@@ -215,14 +225,17 @@ Pbindef(\glitch).stop
 // stutter: repeat random notes of the chord pool, re-rolled every cycle
 (
 Pbindef(\glitch,
+	\instrument, \pluck,
 	\freq, Pn(Plazy({ Pseq(~stutter.(~chord.([10, 13, 9]).flatten, 3, [2, 5])) })).midicps,
-	\dur, Pseq(~rhythm.(6, [3, 8], [1/12, 1/16, 1/8], [1.5, 2, 3]), inf)
+	\dur, Pseq(~rhythm.(6, [3, 8], [1/12, 1/16, 1/8], [1.5, 2, 3]), inf),
+	\pan, Pwhite(-1, 1)
 ).play(t)
 )
 
 (
 Pbindef(\test,
-	\freq, Pseq(~noteMap, inf).midicps,
+	\instrument, \pluck,
+	\freq, Pseq(n, inf).midicps * 1,
 	\dur, 0.33
 ).play
 )
@@ -246,18 +259,20 @@ Pbindef(\test).stop
 // ===========================================================================
 
 // bridge smoke test
-~nodePeck.([3], 14, 300);          // node 3 knocks once
-~nodePat.([3, 9, 10], "x");        // nodes 3/9/10 each knock once
+~pattern.(3, "x");                 // single clean knock on node 3
+~nodePat.([3, 9, 10], "x");        // nodes 3/9/10 each knock once (spaced ~50ms)
+~nodePeck.([3], 14, 300);          // node 3: one peck = a short ROLL of knocks
 
-t.tempo=4
+t.tempo=1
 
 // DOUBLING — plug into the glitch line; some notes also knock their node.
 // prob keeps the solenoids sane on fast bursts; crank it toward 1 to double all.
 (
 Pbindef(\glitch,
-	\freq, Pn(Plazy({ Pseq(~stutter.(~chord.([10, 13, 9]).flatten, 3, [2, 5])) })).midicps,
+	\instrument, \pluck,
+	\freq, Pn(Plazy({ Pseq(~stutter.(~chord.([10, 13, 9]).flatten, 3, [2, 5])) })).midicps *0.5,
 	\dur, Pseq(~rhythm.(6, [3, 8], [1/8, 1/6], [1.5, 2, 3]), inf),
-	\datel, Pfunc(~knocker.(prob: 1))
+	\datel, Pfunc(~knocker.(prob: 1, dur: 1))
 ).play(t)
 )
 Pbindef(\glitch).stop;
@@ -266,11 +281,12 @@ Pbindef(\glitch).stop;
 // then node reply (knock on, amp 0 -> SC silent). Tune the Pn run-lengths.
 (
 Pbindef(\cr,
+	\instrument, \pluck,
 	\freq,  Pseq(~chord.([0, 3, 3, 1]).flatten, inf).midicps,
 	\dur,   Pseq([Pn(1/8, 8), Pn(1/2, 3)], inf),     // fast call, slower reply
 	\knock, Pseq([Pn(0, 8),   Pn(1, 3)],   inf),
 	\amp,   Pseq([Pn(0.2, 8), Pn(0, 3)],   inf),     // SC silent during the reply
-	\datel, Pfunc(~knocker.(dur: 250))
+	\datel, Pfunc(~knocker.(dur: 100, mode: \pat, pat: "xx_x___x"))
 ).play(t)
 )
 Pbindef(\cr).stop;
@@ -278,7 +294,8 @@ Pbindef(\cr).stop;
 // COUNTERPOINT — hocket: each step is EITHER an SC note OR a node knock.
 (
 Pbindef(\cp,
-	\freq,  Pseq(~chord.([3, 10, 7]).flatten, inf).midicps,
+	\instrument, \pluck,
+	\freq,  Pseq(~chord.([3, 3, 10, 15, 14]).flatten, inf).midicps,
 	\dur,   Pseq([1/8, 1/8, 1/4], inf),
 	\knock, Pseq([0, 0, 1], inf),                    // every 3rd step -> node
 	\amp,   Pseq([0.18, 0.18, 0], inf),              // SC silent on the node step
@@ -291,3 +308,6 @@ Pbindef(\cp).stop;
 (
 [\test, \glitch, \cr, \cp].do { |key| Pbindef(key).stop };
 )
+
+MIDIIn.connectAll
+MIDIFunc.trace(true)
