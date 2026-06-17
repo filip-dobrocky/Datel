@@ -52,7 +52,7 @@ Routine({
 	0.5.wait;
 	(0..10).do { |id|
 		~peck.(id, 16, 1500, 6, 1.0);
-		0.1.wait;
+		1.wait;
 	};
 	1.0.wait;
 	// ~auto.(1);          // hand control back to the swarm

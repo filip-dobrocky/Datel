@@ -11,6 +11,7 @@ available. Then run the synthesis / OSC blocks further down, one at a time.
 ~dir = thisProcess.nowExecutingPath.dirname;
 s.options.memSize = 2.pow(20);
 s.options.numWireBufs = 1024;
+s.options.numPrivateAudioBusChannels = 1024;
 
 s.waitForBoot({
 	// ---- note map ---------------------------------------------------------
@@ -105,6 +106,8 @@ s.waitForBoot({
 
 	// --- SynthDefs ---------------------------------------------------------
 	this.executeFile(~dir +/+ "synthdefs/pluck.scd");
+	this.executeFile(~dir +/+ "synthdefs/fx.scd");
+	this.executeFile(~dir +/+ "synthdefs/voice.scd");
 
 
 	s.sync;
@@ -240,6 +243,22 @@ Pbindef(\test,
 ).play
 )
 
+// drone: bursts of ~10 sustained voices (80% hit), then an 18s gap, forever.
+// Voices self-free, so they ring while the pattern moves on (was a Tdef).
+(
+Pbindef(\voices,
+	\instrument, \voice,
+	\dur,   Pseq([Pexprand(0.1, 1.0, 10), 18], inf),         // 10 onsets, then a gap
+	\type,  Pseq([Pwrand([\note, \rest], [0.8, 0.2], 10), \rest], inf),
+	\freq,  (Prand(n, inf) * 0.5).midicps,                   // low drones (half the midinote)
+	\pan,   Pwhite(-0.5, 0.5),
+	\atk,   Pwhite(5, 13),
+	\rel,   Pwhite(8, 14),
+	\amp,   1
+).play(t)
+)
+Pbindef(\voices).stop
+
 (
 Pbindef(\test,
 	\freq, n.midicps * 0.25,
@@ -304,9 +323,65 @@ Pbindef(\cp,
 )
 Pbindef(\cp).stop;
 
+
+// ===========================================================================
+// PbindFx test (miSCellaneous_lib) — pluck source + per-event fx chain, and the
+// same notes drive the physical nodes via ~knocker. \fx names a SynthDef from
+// synthdefs/fx.scd; \fxOrder selects/sequences them (1-based):
+//   1 reverbFx   2 destroyerFx   3 resoFx   4 delay   5 pitchShifterFx
+// ===========================================================================
+Pdef.clear
+(
+Pdef(\fxPluck, PbindFx([
+	\instrument, \pluck,
+	// \dur,   Prand([1, 0.5, 0.25], inf),
+	\dur, Pseq(~rhythm.(6, [3, 8], [1/8, 1/6], [1.5, 2, 3]), inf),
+
+	\amp,   Pwhite(0.5, 0.8, inf),
+	\amp,   Pseq([0.5, 0.5, 0], inf),              // SC silent on the node step
+	// \freq,  Pseq(~chord.([2, 12, 10]).flatten, inf).midicps * 0.5,
+	\freq, Pn(Plazy({ Pseq(~stutter.(~chord.([10, 13, 9]).flatten, 3, [2, 5])) })).midicps *0.5,
+	\pan,   Pwhite(-0.7, 0.7),
+	\knock, Pseq([Pn(0, 8),   Pn(1, 3)],   inf),
+	// \c3,    Prand([10, 20, 40], inf),
+	\out,   0,
+	\fxOrder, Prand([[2], [3], [4], [2, 1], [3, 1], [4, 1]], inf),
+	// \fxOrder, [4],
+	\cleanupDelay, 1.5,                     // pluck rings out; allow the tail
+	\datel, Pfunc(~knocker.(prob: 0.5, dur: 1000))     // notes also knock the swarm
+], [
+	\fx, \reverbFx,
+	\mix, Pseq([0.2, 0.5, 0.7, 0.9], inf),
+	\decay, Prand([1, 2, 4], inf),
+	\predelay, 0.2,
+	\damping, Prand([0.82, 0.99], inf),
+	\shimmerMix, Pseq([0, 0.5, 1], inf),
+	\cleanupDelay, Pkey(\decay) + 1
+], [
+	\fx, \destroyerFx,
+	\mix, Prand([0.2, 0.5, 0.7], inf),
+	\crush, Prand([0.2, 0.3, 0.5, 0.84], inf),
+	\bass, Prand([0, 0.5, 0.66], inf),
+	\cleanupDelay, 0.2
+], [
+	\fx, \delay,
+	\mix, Prand([0.2, 0.5, 0.7], inf),
+	\feedback, Pwhite(0.1, 0.7),
+	\delayTime, Pkey(\dur) * Prand([0.5, 0.25, 0.125], inf),
+	\cleanupDelay, Pkey(\delayTime) * 10 * Pkey(\feedback)
+], [
+	\fx, \pitchShifterFx,
+	\mix, Prand([0.2, 0.5, 0.7], inf),
+	\ratio, Prand([0.5, 2, 3, 4, 6], inf),
+	\cleanupDelay, 0.5
+])).play(t);
+)
+Pdef(\fxPluck).stop;
+
 // stop everything (panic)
 (
 [\test, \glitch, \cr, \cp].do { |key| Pbindef(key).stop };
+Pdef(\fxPluck).stop;
 )
 
 MIDIIn.connectAll
