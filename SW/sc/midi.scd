@@ -12,6 +12,9 @@ Note layout (sequential over the nodes, id = position in ~datelNotes):
 CC:
     77  peck freq   (5..20 Hz = knock roll rate)
     78  peck dur    (ms)
+    35  reso nFreqs (0..1 -> 1..n.size partials of the global resonator)
+    54  loop amp    (0..1 amp of the woodpecker buffer loop)
+    55  reso mix    (0..1 dry/wet of the global resonator)
     79  peck curve  (-10..10)
     80  peck amp    (0..1)
     83  tempo       (drives TempoClock t in bps + OSC swarm tempo in BPM, 1:1)
@@ -46,6 +49,18 @@ MIDIdef.noteOn(\datelPeck, { |vel, num|
 MIDIdef.cc(\datelControls, { |val, num|
 	var scaled;
 	switch (num)
+	{35} {
+		scaled = val.linlin(0, 127, 0, 1);
+		~reso !? { ~reso.set(\nFreqs, scaled) };
+		"reso nFreqs: % (% partials)".format(scaled.round(1e-3), (scaled * (n.size - 1) + 1).round).postln }
+	{54} {
+		scaled = val.linlin(0, 127, 0, 1);
+		~loop !? { ~loop.set(\amp, scaled) };
+		"loop amp: %".format(scaled.round(1e-3)).postln }
+	{55} {
+		scaled = val.linlin(0, 127, 0, 1);
+		~reso !? { ~reso.set(\mix, scaled) };
+		"reso mix: %".format(scaled.round(1e-3)).postln }
 	{77} {
 		~peckFreq = val.linlin(0, 127, 5, 20);
 		"peck freq: % Hz".format(~peckFreq.round(0.1)).postln }

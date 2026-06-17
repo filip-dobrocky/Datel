@@ -108,7 +108,10 @@ s.waitForBoot({
 	this.executeFile(~dir +/+ "synthdefs/pluck.scd");
 	this.executeFile(~dir +/+ "synthdefs/fx.scd");
 	this.executeFile(~dir +/+ "synthdefs/voice.scd");
+	this.executeFile(~dir +/+ "synthdefs/loop.scd");
 
+	// --- sample buffers (s.sync below waits for the load) ------------------
+	~loopBuf = Buffer.read(s, ~dir +/+ "woodpeckers-loop.wav");
 
 	s.sync;
 
@@ -162,6 +165,13 @@ s.waitForBoot({
 			ev;   // must never return nil (nil would end the pattern)
 		};
 	};
+
+	// --- master chain ------------------------------------------------------
+	// Only the loop feeds the resonator: loop -> ~resoBus -> reso -> bus 0.
+	// Everything else writes straight to bus 0; the limiter sits last (tail).
+	~resoBus = Bus.audio(s, ~numChans);
+	~reso    = Synth(\reso, [\in, ~resoBus, \out, 0, \mix, 0], addAction: 'addToTail');
+	~limiter = Synth(\masterLimiter, [\bus, 0], addAction: 'addToTail');
 
 	// --- MIDI mapping (notes -> pecks, CC -> peck params + master) ----------
 	this.executeFile(~dir +/+ "midi.scd");
@@ -250,7 +260,7 @@ Pbindef(\voices,
 	\instrument, \voice,
 	\dur,   Pseq([Pexprand(0.1, 1.0, 10), 18], inf),         // 10 onsets, then a gap
 	\type,  Pseq([Pwrand([\note, \rest], [0.8, 0.2], 10), \rest], inf),
-	\freq,  (Prand(n, inf) * 0.5).midicps,                   // low drones (half the midinote)
+	\freq,  (Prand(n, inf)).midicps * 0.25,                   // low drones
 	\pan,   Pwhite(-0.5, 0.5),
 	\atk,   Pwhite(5, 13),
 	\rel,   Pwhite(8, 14),
@@ -258,6 +268,12 @@ Pbindef(\voices,
 ).play(t)
 )
 Pbindef(\voices).stop
+
+// woodpecker loop — plays ~loopBuf into ~resoBus (the only reso input); CC 54 amp
+(
+~loop = Synth(\loop, [\out, ~resoBus, \buf, ~loopBuf, \amp, 0.3, \attack, 5, \decay, 5]);
+)
+~loop.set(\gate, 0);   // fade out + free
 
 (
 Pbindef(\test,
@@ -328,7 +344,7 @@ Pbindef(\cp).stop;
 // PbindFx test (miSCellaneous_lib) — pluck source + per-event fx chain, and the
 // same notes drive the physical nodes via ~knocker. \fx names a SynthDef from
 // synthdefs/fx.scd; \fxOrder selects/sequences them (1-based):
-//   1 reverbFx   2 destroyerFx   3 resoFx   4 delay   5 pitchShifterFx
+//   1 reverbFx   2 destroyerFx   3 delay   4 pitchShifterFx
 // ===========================================================================
 Pdef.clear
 (
