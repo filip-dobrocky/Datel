@@ -8,8 +8,10 @@
 ~pattern.(6, "pF30AFF___x05xff_");
 ~pattern.(8, "x___p7F09FF_xf0x6fx_");
 ~pattern.(7, "pCA99FF_xf0x6fx_");
+~pattern.(10, "pCA99FF_xf0x6fx_");
 
 ~listen.([6, 7, 8, 4, 9, 10], 1);
+~listen.([0, 1, 2, 3, 6, 7, 8, 4, 9, 10], 0); //does it work
 
 ~auto.(1)
 
@@ -40,8 +42,9 @@ Pbindef(\cr,
 	\instrument, \pluck,
 	\out, ~pluckBus,
 	\freq,  Pn(Plazy({ Pseq(~chord.(~chordPool).flatten) })).midicps,
-	\dur,   Pseq([Pn(1/8, 8), Pn(1/2, 3)], inf),     // fast call, slower reply
-	// \dur,   Pseq([Pn(1/8, 8), Pn(1/2, 3)], inf) * 0.5,     // fast call, slower reply
+    \freq,  Pn(Plazy({ Pseq(~chord.(~chordPool).flatten) })).midicps * 0.5,
+	// \dur,   Pseq([Pn(1/8, 8), Pn(1/2, 3)], inf),     // fast call, slower reply
+	\dur,   Pseq([Pn(1/8, 8), Pn(1/2, 3)], inf) * 0.5,     // fast call, slower reply
 	\knock, Pseq([Pn(0, 8),   Pn(1, 3)],   inf),
 	\amp,   Pseq([Pn(0.2, 8), Pn(0, 3)],   inf),     // SC silent during the reply
 	\datel, Pfunc(~knocker.(prob: 0.5, dur: 100, mode: \pat, pat: "xa0x_x0f___xff"))
@@ -59,7 +62,7 @@ Pbindef(\hopcip,
 	\decay, Pn(Pgeom(1.0, 0.8, 8)),
 	\pan, Pwhite(-0.33, 0.33),
 	\datel, Pfunc(~knocker.(prob: 0)),
-	// \datel, Pfunc(~knocker.(prob: 0.1)),
+	\datel, Pfunc(~knocker.(prob: 0.1, dur: 500)),
 	\amp, 0.17,
 
 	\out,   ~pluckBus,
@@ -167,3 +170,4 @@ Pbindef(\voices).play
 ~pause.(1);
 ~pause.(0);
 
+~blinking.(0)
