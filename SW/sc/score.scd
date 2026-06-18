@@ -1,3 +1,5 @@
+~findNode.();              // re-detect the node after reconnecting Wi-Fi
+
 //--- 1. auto off, play different patterns on different woodpeckers gradually, turn on listen, then auto on, play with density
 ~reset.()
 ~auto.(0)

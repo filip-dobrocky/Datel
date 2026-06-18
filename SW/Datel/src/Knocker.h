@@ -54,7 +54,9 @@ public:
         peck_total    = dur / peck_interval;
         peck_step     = 0;
         peck_curve    = curve;
-        peck_amp      = amp;
+        // Master gain, applied after the PECK_AMP_MIN floor (set at parse /
+        // apply_peck) so velocity == 0 silences the peck entirely.
+        peck_amp      = (uint16_t)amp * velocity / 255;
         t_peck.setInterval(peck_interval);
         t_peck.restart();
     };
@@ -158,11 +160,11 @@ private:
             }
             ESP_LOGD(KNOCK_TAG, "Hit %u eff=%u windup=%u", k->knock_index, eff, windup);
         } else if (st.type == STEP_PECK) {
-            uint8_t amp = (uint16_t)st.amp * k->velocity / 255; // master gain
+            // peck() applies the master gain; pass the pattern amp through.
             // peck() takes dur in ms; Step stores dur in steps -> convert.
-            k->peck(st.freq, (uint32_t)st.dur * note_ms, (float)st.curve, amp);
+            k->peck(st.freq, (uint32_t)st.dur * note_ms, (float)st.curve, st.amp);
             ESP_LOGD(KNOCK_TAG, "Peck %u f=%u dur=%u amp=%u", k->knock_index,
-                     st.freq, st.dur, amp);
+                     st.freq, st.dur, st.amp);
         } else { // STEP_REST
             analogWrite(k->pin, 0);
         }

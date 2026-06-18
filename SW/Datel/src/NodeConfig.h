@@ -34,12 +34,19 @@ inline NodeConfig nodeConfigFor(int id) {
     NodeConfig cfg{50, 0.5f, HIT_AMP_MIN, PECK_AMP_MIN, HIT_AMP_DEFAULT,
                    PECK_AMP_DEFAULT};
     switch (id) {
+        case 0:
+            cfg.knocker_off_time_max  = 30;
         case 1:
             cfg.knocker_off_time_frac = 0.2f;
+            cfg.peck_amp_min = 60;
             break;
-        case 0:
         case 4:
             cfg.knocker_off_time_frac = 0.3f;
+            cfg.peck_amp_min = 60;
+            break;
+        case 2:
+        case 3:
+            cfg.peck_amp_min = 60;
             break;
     }
     return cfg;
