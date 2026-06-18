@@ -36,7 +36,10 @@ SynthDef(\destroyerFx, { |out, in|
 	);
 	sig = ((1 - bass) * sig) + (bass * RLPF.ar(sig, \cutoff.kr(300), 0.5));
 	sig = sig.softclip;
-	Out.ar(out, inSig.blend(sig, \mix.kr(0, 4)));
+	sig = LeakDC.ar(sig);
+	sig = inSig.blend(sig, \mix.kr(0, 4));
+	sig = sig * EnvGen.kr(Env.asr(\atk.kr(0.01), 1, \rel.kr(0.5)), \gate.kr(1), doneAction: Done.freeSelf);
+	Out.ar(out, sig);
 }).add;
 
 // ---- pitch shifter --------------------------------------------------------

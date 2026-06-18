@@ -58,6 +58,27 @@ s.waitForBoot({
 		);
 	};
 
+	// ---- chord pools: 5 harmonic groupings of c (each = indices into c) ----
+	~chordPools = [
+		[2, 7, 11],       // 0 - tonic        G  Gmaj7  Gadd9
+		[0, 8, 10, 12],   // 1 - subdominant  Cmaj7  C  C6/9  Csus2
+		[1, 4],           // 2 - dominant     Dadd4  D
+		[3, 5, 6, 13],    // 3 - minor        Em7  Am7  Bm  Em9
+		[9, 14, 15]       // 4 - color        cluster  Esus2  C/D
+	];
+	// ~chordPool is the live global pool the patterns draw from. Toggling pools
+	// (MIDI notes 76/89/90/91/92) updates it: none on -> pool 0, else the union.
+	~poolOn = Array.fill(~chordPools.size, false);
+	~chordPool = ~chordPools[0];
+	~updatePool = {
+		var on = (0 .. ~chordPools.size - 1).select { |i| ~poolOn[i] };
+		~chordPool = on.isEmpty.if(
+			{ ~chordPools[0] },
+			{ on.collect { |i| ~chordPools[i] }.flatten }
+		);
+		"chordPool: pools % -> chords %".format(on.isEmpty.if({ [0] }, { on }), ~chordPool).postln;
+	};
+
 	// ~restDensity (0..1) scales the rests in ~rhythm: 0 = full rests, 1 = none.
 	// Set it live (~restDensity = 0.7) to thin/thicken re-rolling rhythms.
 	// (Note: ~density is the swarm OSC control from osc.scd — different thing.)
@@ -173,8 +194,13 @@ s.waitForBoot({
 	~reso    = Synth(\reso, [\in, ~resoBus, \out, 0, \mix, 0], addAction: 'addToTail');
 	~limiter = Synth(\masterLimiter, [\bus, 0], addAction: 'addToTail');
 
+	// global level for all \voice synths: map their \gAmp to this control bus.
+	~voiceAmp = Bus.control(s, 1).set(1);
+
 	// --- MIDI mapping (notes -> pecks, CC -> peck params + master) ----------
 	this.executeFile(~dir +/+ "midi.scd");
+
+	this.executeFile(~dir +/+ "stopwatch.scd");
 
 	"Datel main: server booted, synthdefs + OSC + MIDI loaded.".postln;
 	1.wait;
@@ -194,6 +220,8 @@ s.waitForBoot({
 ~tempo.(120);
 ~reset.();
 
+~density.(0)
+
 ~pause.(1)
 ~pause.(0)
 
@@ -207,7 +235,7 @@ Pbindef(\test,
 
 (
 Pbindef(\test,
-	\freq, Pseq(~chord.([1, 10, 14]).flatten, inf).midicps * 0.5,
+	\freq, Pn(Plazy({ Pseq(~chord.(~chordPool).flatten) })).midicps * 0.5,
 	\dur, 0.25
 ).play(t)
 )
@@ -215,7 +243,7 @@ Pbindef(\test,
 // frenetic glitch: one fixed rhythm cycle, arpeggiating the chord pool
 (
 Pbindef(\glitch,
-	\freq, Pseq(~chord.([10, 13, 9]).flatten, inf).midicps,
+	\freq, Pn(Plazy({ Pseq(~chord.(~chordPool).flatten) })).midicps,
 	\dur, Pseq(~rhythm.(6, [3, 8], [1/12, 1/16, 1/8], [1.5, 2, 3]), inf)
 ).play(t)
 )
@@ -223,7 +251,7 @@ Pbindef(\glitch,
 // same, but re-rolls a fresh rhythm every cycle (Plazy + Pn) -> always evolving
 (
 Pbindef(\glitch,
-	\freq, Pseq(~chord.([4, 13, 11]).flatten, inf).midicps,
+	\freq, Pn(Plazy({ Pseq(~chord.(~chordPool).flatten) })).midicps,
 	\dur, Pn(Plazy({ Pseq(~rhythm.(6, [3, 8], [1/12, 1/16, 1/8], [1.5, 2, 3])) }))
 ).play(t)
 )
@@ -239,7 +267,7 @@ Pbindef(\glitch).stop
 (
 Pbindef(\glitch,
 	\instrument, \pluck,
-	\freq, Pn(Plazy({ Pseq(~stutter.(~chord.([10, 13, 9]).flatten, 3, [2, 5])) })).midicps,
+	\freq, Pn(Plazy({ Pseq(~stutter.(~chord.(~chordPool).flatten, 3, [2, 5])) })).midicps,
 	\dur, Pseq(~rhythm.(6, [3, 8], [1/12, 1/16, 1/8], [1.5, 2, 3]), inf),
 	\pan, Pwhite(-1, 1)
 ).play(t)
@@ -264,7 +292,8 @@ Pbindef(\voices,
 	\pan,   Pwhite(-0.5, 0.5),
 	\atk,   Pwhite(5, 13),
 	\rel,   Pwhite(8, 14),
-	\amp,   1
+	\amp,   1,
+	\gAmp,  ~voiceAmp.asMap          // all voices follow the ~voiceAmp control bus
 ).play(t)
 )
 Pbindef(\voices).stop
@@ -305,7 +334,7 @@ t.tempo=1
 (
 Pbindef(\glitch,
 	\instrument, \pluck,
-	\freq, Pn(Plazy({ Pseq(~stutter.(~chord.([10, 13, 9]).flatten, 3, [2, 5])) })).midicps *0.5,
+	\freq, Pn(Plazy({ Pseq(~stutter.(~chord.(~chordPool).flatten, 3, [2, 5])) })).midicps *0.5,
 	\dur, Pseq(~rhythm.(6, [3, 8], [1/8, 1/6], [1.5, 2, 3]), inf),
 	\datel, Pfunc(~knocker.(prob: 1, dur: 1))
 ).play(t)
@@ -317,7 +346,7 @@ Pbindef(\glitch).stop;
 (
 Pbindef(\cr,
 	\instrument, \pluck,
-	\freq,  Pseq(~chord.([0, 3, 3, 1]).flatten, inf).midicps,
+	\freq,  Pn(Plazy({ Pseq(~chord.(~chordPool).flatten) })).midicps,
 	\dur,   Pseq([Pn(1/8, 8), Pn(1/2, 3)], inf),     // fast call, slower reply
 	\knock, Pseq([Pn(0, 8),   Pn(1, 3)],   inf),
 	\amp,   Pseq([Pn(0.2, 8), Pn(0, 3)],   inf),     // SC silent during the reply
@@ -330,7 +359,7 @@ Pbindef(\cr).stop;
 (
 Pbindef(\cp,
 	\instrument, \pluck,
-	\freq,  Pseq(~chord.([3, 3, 10, 15, 14]).flatten, inf).midicps,
+	\freq,  Pn(Plazy({ Pseq(~chord.(~chordPool).flatten) })).midicps,
 	\dur,   Pseq([1/8, 1/8, 1/4], inf),
 	\knock, Pseq([0, 0, 1], inf),                    // every 3rd step -> node
 	\amp,   Pseq([0.18, 0.18, 0], inf),              // SC silent on the node step
@@ -356,15 +385,17 @@ Pdef(\fxPluck, PbindFx([
 	\amp,   Pwhite(0.5, 0.8, inf),
 	\amp,   Pseq([0.5, 0.5, 0], inf),              // SC silent on the node step
 	// \freq,  Pseq(~chord.([2, 12, 10]).flatten, inf).midicps * 0.5,
-	\freq, Pn(Plazy({ Pseq(~stutter.(~chord.([10, 13, 9]).flatten, 3, [2, 5])) })).midicps *0.5,
+	\freq, Pn(Plazy({ Pseq(~stutter.(~chord.(~chordPool).flatten, 3, [2, 5])) })).midicps *0.5,
 	\pan,   Pwhite(-0.7, 0.7),
 	\knock, Pseq([Pn(0, 8),   Pn(1, 3)],   inf),
 	// \c3,    Prand([10, 20, 40], inf),
 	\out,   0,
 	\fxOrder, Prand([[2], [3], [4], [2, 1], [3, 1], [4, 1]], inf),
 	// \fxOrder, [4],
-	\cleanupDelay, 1.5,                     // pluck rings out; allow the tail
-	\datel, Pfunc(~knocker.(prob: 0.5, dur: 1000))     // notes also knock the swarm
+	\cleanupDelay, 0.1,                     // pluck rings out; allow the tail
+	\datel, Pfunc(~knocker.(prob: 1, dur: rrand(500, 155))),     // notes also knock the swarm
+	\datel, Pfunc(~knocker.(dur: 100, mode: \pat, pat: "xx_x___x")),
+
 ], [
 	\fx, \reverbFx,
 	\mix, Pseq([0.2, 0.5, 0.7, 0.9], inf),
@@ -378,7 +409,7 @@ Pdef(\fxPluck, PbindFx([
 	\mix, Prand([0.2, 0.5, 0.7], inf),
 	\crush, Prand([0.2, 0.3, 0.5, 0.84], inf),
 	\bass, Prand([0, 0.5, 0.66], inf),
-	\cleanupDelay, 0.2
+	\cleanupDelay, 1
 ], [
 	\fx, \delay,
 	\mix, Prand([0.2, 0.5, 0.7], inf),
@@ -389,7 +420,7 @@ Pdef(\fxPluck, PbindFx([
 	\fx, \pitchShifterFx,
 	\mix, Prand([0.2, 0.5, 0.7], inf),
 	\ratio, Prand([0.5, 2, 3, 4, 6], inf),
-	\cleanupDelay, 0.5
+	\cleanupDelay, 0.8
 ])).play(t);
 )
 Pdef(\fxPluck).stop;
