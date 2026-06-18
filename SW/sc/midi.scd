@@ -11,6 +11,7 @@ Note layout (sequential over the nodes, id = position in ~datelNotes):
 
 Notes 76/89/90/91/92 map to nodes 11..15 (which don't exist -> no peck), and
 double as toggles for the 5 harmonic chord pools (noteOn flips a pool on/off).
+Note 108 = stop all patterns (~stopAll).
 
 CC:
     77  peck freq   (5..20 Hz = knock roll rate)
@@ -21,6 +22,7 @@ CC:
     55  reso mix    (0..1 dry/wet of the global resonator)
     79  peck curve  (-10..10)
     80  peck amp    (0..1)
+    49  velocity    (0..1 swarm master gain -> OSC /datel/velocity)
     81  density     (0..1 swarm activity density -> OSC /datel/density)
     82  pluck amp   (live level of the pluck submix, via ~pluckGain on ~pluckBus)
     34  voice amp   (live level of all \voice synths, via ~voiceAmp bus)
@@ -62,6 +64,9 @@ MIDIdef.noteOn(\poolToggle, { |vel, num|
 	};
 }, ~poolNotes);
 
+// ---- stop all patterns (note 108) -----------------------------------------
+MIDIdef.noteOn(\stopAll, { ~stopAll.(); "STOP ALL PATTERNS".postln }, 108);
+
 // ---- global peck params + master level (CC) -------------------------------
 MIDIdef.cc(\datelControls, { |val, num|
 	var scaled;
@@ -86,6 +91,10 @@ MIDIdef.cc(\datelControls, { |val, num|
 		scaled = val.linlin(0, 127, 0, 1);
 		~reso !? { ~reso.set(\mix, scaled) };
 		"reso mix: %".format(scaled.round(1e-3)).postln }
+	{49} {
+		scaled = val.linlin(0, 127, 0, 1);
+		~velocity.(scaled);
+		"velocity: %".format(scaled.round(1e-3)).postln }
 	{77} {
 		~peckFreq = val.linlin(0, 127, 5, 20);
 		"peck freq: % Hz".format(~peckFreq.round(0.1)).postln }

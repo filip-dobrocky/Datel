@@ -69,11 +69,11 @@ s.waitForBoot({
 	// ~chordPool is the live global pool the patterns draw from. Toggling pools
 	// (MIDI notes 76/89/90/91/92) updates it: none on -> pool 0, else the union.
 	~poolOn = Array.fill(~chordPools.size, false);
-	~chordPool = ~chordPools[0];
+	~chordPool = ~chordPools[4];
 	~updatePool = {
 		var on = (0 .. ~chordPools.size - 1).select { |i| ~poolOn[i] };
 		~chordPool = on.isEmpty.if(
-			{ ~chordPools[0] },
+			{ ~chordPools[4] },
 			{ on.collect { |i| ~chordPools[i] }.flatten }
 		);
 		"chordPool: pools % -> chords %".format(on.isEmpty.if({ [0] }, { on }), ~chordPool).postln;
@@ -220,10 +220,16 @@ s.waitForBoot({
 	// global level for all \voice synths: map their \gAmp to this control bus.
 	~voiceAmp = Bus.control(s, 1).set(1);
 
+	// stop every pattern (Pbindef / Pdef / Tdef); leaves the master chain + node
+	// synths running. Mapped to MIDI note 108; ringing voices fade out on their own.
+	~stopAll = { [Pbindef, Pdef, Tdef].do { |class| class.all.do(_.stop) } };
+
 	// --- MIDI mapping (notes -> pecks, CC -> peck params + master) ----------
 	this.executeFile(~dir +/+ "midi.scd");
 
+	Window.closeAll;
 	this.executeFile(~dir +/+ "stopwatch.scd");
+	s.meter;
 
 	"Datel main: server booted, synthdefs + OSC + MIDI loaded.".postln;
 	1.wait;
@@ -312,6 +318,11 @@ Pdef(\ratchet, Pn(Plazy({
 		\freq, Pseq(r[0], 1).midicps,
 		\dur,  Pseq(r[1], 1),
 		\pan,  Pwhite(-1, 1),
+		\damp, Pexprand(1, 0.001),
+		\modFreq, Pkey(\freq) * 2,
+		\modDepth, Pseq([0, 1, 5, 10], inf),
+		\decay, Pn(Pgeom(1.5, 0.9, 8)),
+		\pan, Pwhite(-0.33, 0.33),
 		\datel, Pfunc(~knocker.(prob: 0.3))
 	)
 }))).play(t)
@@ -468,11 +479,64 @@ Pdef(\fxPluck, PbindFx([
 )
 Pdef(\fxPluck).stop;
 
-// stop everything (panic)
+
+// PbindFx + RATCHET — true-stutter pluck through the per-event fx chain.
+// The source is a whole event pattern (Pn+Plazy+Pbind) so the ratcheted freq/dur
+// stay locked; PbindFx reads \fxOrder / \cleanupDelay / etc. from those events.
 (
-[\test, \glitch, \cr, \cp].do { |key| Pbindef(key).stop };
-Pdef(\fxPluck).stop;
+Pdef(\fxRatchet, PbindFx(
+	Pn(Plazy({
+		var r = ~ratchet.(~chord.(~chordPool).flatten.scramble, [1/4, 1/8, 1/2, 1/16], 0.5, [2, 6]);
+		Pbind(
+			\instrument, \pluck,
+			\out,    ~pluckBus,
+			\freq,   Pseq(r[0], 1).midicps * 0.5,
+			\dur,    Pseq(r[1], 1),
+			\amp,    Pwhite(-24, -16).dbamp,
+			\pan,    Pwhite(-0.7, 0.7),
+			\damp,   Pexprand(1, 0.001),
+			\modFreq, Pkey(\freq) * 2,
+			\modDepth, Pseq([0, 1, 5, 10], inf),
+			\decay, Pn(Pgeom(1.5, 0.9, 8)),
+			// fx only on slots longer than 0.15 beat; short ratchets stay dry (0 = no fx)
+			\fxOrder, Pfunc({ |ev|
+				if (ev[\dur] > 0.1) { [[1], [2], [3], [4], [2, 1], [3, 1]].choose } { [0, [4]].choose } }),
+			\cleanupDelay, 0.3,
+			\datel,  Pfunc(~knocker.(prob: 0.1))
+		)
+	})),
+	[
+		\fx, \reverbFx,
+		\mix, Pseq([0.2, 0.5, 0.7, 0.9], inf),
+		\decay, Prand([1, 2, 4], inf),
+		\predelay, 0.2,
+		\damping, Prand([0.82, 0.99], inf),
+		\shimmerMix, Pseq([0, 0.5, 1], inf),
+		\cleanupDelay, Pkey(\decay) + 1
+	], [
+		\fx, \destroyerFx,
+		\mix, Prand([0.2, 0.5, 0.7], inf),
+		\crush, Prand([0.2, 0.3, 0.5], inf),
+		\bass, Prand([0, 0.5, 0.66], inf),
+		\cleanupDelay, Pkey(\dur)
+	], [
+		\fx, \delay,
+		\mix, Prand([0.2, 0.5, 0.7], inf),
+		\feedback, Pwhite(0.1, 0.7),
+		\delayTime, Pkey(\dur) * Prand([0.5, 0.25, 0.125], inf),
+		\cleanupDelay, Pkey(\delayTime) * 10 * Pkey(\feedback)
+	], [
+		\fx, \pitchShifterFx,
+		\mix, Prand([0.2, 0.5, 0.7], inf),
+		\ratio, Prand([0.5, 2, 3, 4, 6], inf),
+		\cleanupDelay, 0.8
+	]
+)).play(t);
 )
+Pdef(\fxRatchet).stop;
+
+// stop everything (panic) — also on MIDI note 108
+~stopAll.()
 
 MIDIIn.connectAll
 MIDIFunc.trace(true)
