@@ -263,7 +263,7 @@ Pbindef(\test,
 	\modDepth, Pseq([0, 1, 10, 20], inf),
 	\decay, Pn(Pgeom(1.0, 0.8, 8)),
 	\pan, Pwhite(-0.33, 0.33),
-	\datel, Pfunc(~knocker.(prob: 0.8)),
+	\datel, Pfunc(~knocker.(prob: 0.1)),
 
 	\out,   ~pluckBus,
 ).play(t)
