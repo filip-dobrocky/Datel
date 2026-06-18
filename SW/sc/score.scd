@@ -163,4 +163,5 @@ Pbindef(\voices).play
 ~auto.(0);
 
 ~pause.(1);
+~pause.(0);
 
