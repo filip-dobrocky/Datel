@@ -77,15 +77,15 @@ SynthDef(\delay, {
 
 // ---- resonator (bank tuned to the note map) -------------------------------
 // Reads its input bus, rings it through partials taken from the note map `n`,
-// blends dry/wet by \mix and writes to \out. \nFreqs (0..1) sets how many
-// partials ring, 1..numFreqs. Fed only by the loop (see main.scd routing).
+// blends dry/wet by \mix and writes to \out. \nFreqs (0..1) fades partials in
+// one by one, 1 partial at 0 .. all numFreqs at 1. Fed only by the loop.
 SynthDef(\reso, { |in = 0, out = 0|
 	var inSig    = In.ar(in, ~numChans);
 	var freqs    = n.midicps;                          // partials from the note map
 	var numFreqs = freqs.size;                         // max active (= n.size)
-	var nNorm    = \nFreqs.kr(0, 0.1).clip(0, 1);      // 0..1 -> 1..numFreqs
-	var nActive  = (nNorm * (numFreqs - 1) + 1).round;
-	var amps     = numFreqs.collect { |i| nActive > i }; // ring the first nActive
+	var nNorm    = \nFreqs.kr(0, 0.1).clip(0, 1);      // 0..1
+	var count    = nNorm * (numFreqs - 1) + 1;         // 1..numFreqs (continuous)
+	var amps     = numFreqs.collect { |i| (count - i).clip(0, 1) }; // fade each in
 	var sig = DynKlank.ar(`[freqs, amps, 1 ! numFreqs], inSig, \freqScale.kr(1), \freqOffset.kr(0), \decayScale.kr(1)) * 0.2;
 	sig = Limiter.ar(sig);
 	Out.ar(out, inSig.blend(sig, \mix.kr(0, 4)));
