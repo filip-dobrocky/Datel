@@ -176,6 +176,9 @@ s.waitForBoot({
 	~nodePat  = { |ids, str = "x", gap = 0.05|
 		{ ids.asArray.do { |id| ~pattern.(id, str); gap.wait } }.fork(SystemClock);
 	};
+	~nodeListen = { |ids, on = 1, gap = 0.05|
+		{ ids.asArray.do { |id| ~listen.(id, on); gap.wait } }.fork(SystemClock);
+	};
 
 	// pitch -> node id, matched by pitch class (octave-robust), nearest octave.
 	~nodeOf = { |midi|
