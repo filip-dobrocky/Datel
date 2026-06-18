@@ -212,11 +212,13 @@ s.waitForBoot({
 	// --- master chain ------------------------------------------------------
 	// loop -> ~resoBus -> reso -> bus 0.  plucks -> ~pluckBus -> pluckGain -> 0.
 	// Everything else writes straight to bus 0; the limiter sits last (tail).
-	~resoBus   = Bus.audio(s, ~numChans);
-	~pluckBus  = Bus.audio(s, ~numChans);
-	~reso      = Synth(\reso, [\in, ~resoBus, \out, 0, \mix, 0], addAction: 'addToTail');
-	~pluckGain = Synth(\pluckGain, [\in, ~pluckBus, \out, 0, \amp, 1], addAction: 'addToTail');
-	~limiter   = Synth(\masterLimiter, [\bus, 0], addAction: 'addToTail');
+	~resoBus    = Bus.audio(s, ~numChans);
+	~pluckBus   = Bus.audio(s, ~numChans);
+	~pluckBus2  = Bus.audio(s, ~numChans);   // second pluck submix (route to it yourself)
+	~reso       = Synth(\reso, [\in, ~resoBus, \out, 0, \mix, 0], addAction: 'addToTail');
+	~pluckGain  = Synth(\pluckGain, [\in, ~pluckBus, \out, 0, \amp, 1], addAction: 'addToTail');
+	~pluckGain2 = Synth(\pluckGain, [\in, ~pluckBus2, \out, 0, \amp, 1], addAction: 'addToTail');
+	~limiter    = Synth(\masterLimiter, [\bus, 0], addAction: 'addToTail');
 
 	// global level for all \voice synths: map their \gAmp to this control bus.
 	~voiceAmp = Bus.control(s, 1).set(1);

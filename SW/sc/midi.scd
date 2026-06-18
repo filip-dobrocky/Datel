@@ -25,6 +25,7 @@ CC:
     49  velocity    (0..1 swarm master gain -> OSC /datel/velocity)
     81  density     (0..1 swarm activity density -> OSC /datel/density)
     82  pluck amp   (live level of the pluck submix, via ~pluckGain on ~pluckBus)
+    18  pluck amp 2 (live level of the 2nd pluck submix, via ~pluckGain2 on ~pluckBus2)
     34  voice amp   (live level of all \voice synths, via ~voiceAmp bus)
     83  tempo       (sets OSC swarm BPM; TempoClock t runs at half that BPM)
     84  master level (server volume, as in garden-sc)
@@ -115,6 +116,10 @@ MIDIdef.cc(\datelControls, { |val, num|
 		scaled = ~midiLvlScale.(val);
 		~pluckGain !? { ~pluckGain.set(\amp, scaled) };   // live level of the pluck submix
 		"pluck amp: % dB".format(scaled.ampdb.round(0.1)).postln }
+	{18} {
+		scaled = ~midiLvlScale.(val);
+		~pluckGain2 !? { ~pluckGain2.set(\amp, scaled) };   // live level of pluck submix 2
+		"pluck amp 2: % dB".format(scaled.ampdb.round(0.1)).postln }
 	{83} {
 		// CC -> swarm BPM; the TempoClock runs at half that BPM (in bps).
 		var bpm = val.linexp(0, 127, 60, 500);   // OSC swarm tempo (clamped there)
