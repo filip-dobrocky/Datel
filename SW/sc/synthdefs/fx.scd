@@ -91,6 +91,13 @@ SynthDef(\reso, { |in = 0, out = 0|
 	Out.ar(out, inSig.blend(sig, \mix.kr(0, 4)));
 }).add;
 
+// ---- pluck submix gain (reads ~pluckBus, attenuates, writes to master) ----
+// One per-bus gain synth: lets all \pluck synths share a live level without an
+// In ugen in the pluck synthdef itself (which PbindFx forbids on its sources).
+SynthDef(\pluckGain, { |in = 0, out = 0, amp = 1|
+	Out.ar(out, In.ar(in, ~numChans) * amp.lag(0.1));
+}).add;
+
 // ---- master limiter (in-place on the master bus, last in the chain) -------
 SynthDef(\masterLimiter, { |bus = 0|
 	var sig = In.ar(bus, ~numChans);

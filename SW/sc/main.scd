@@ -188,11 +188,13 @@ s.waitForBoot({
 	};
 
 	// --- master chain ------------------------------------------------------
-	// Only the loop feeds the resonator: loop -> ~resoBus -> reso -> bus 0.
+	// loop -> ~resoBus -> reso -> bus 0.  plucks -> ~pluckBus -> pluckGain -> 0.
 	// Everything else writes straight to bus 0; the limiter sits last (tail).
-	~resoBus = Bus.audio(s, ~numChans);
-	~reso    = Synth(\reso, [\in, ~resoBus, \out, 0, \mix, 0], addAction: 'addToTail');
-	~limiter = Synth(\masterLimiter, [\bus, 0], addAction: 'addToTail');
+	~resoBus   = Bus.audio(s, ~numChans);
+	~pluckBus  = Bus.audio(s, ~numChans);
+	~reso      = Synth(\reso, [\in, ~resoBus, \out, 0, \mix, 0], addAction: 'addToTail');
+	~pluckGain = Synth(\pluckGain, [\in, ~pluckBus, \out, 0, \amp, 1], addAction: 'addToTail');
+	~limiter   = Synth(\masterLimiter, [\bus, 0], addAction: 'addToTail');
 
 	// global level for all \voice synths: map their \gAmp to this control bus.
 	~voiceAmp = Bus.control(s, 1).set(1);
@@ -228,23 +230,15 @@ s.waitForBoot({
 (
 Pbindef(\test,
 	\freq, Pseq([[n[1], n[3], n[7], n[9]], [n[0], n[3], n[6], n[10]]], inf).midicps,
-	\dur, 0.1,
-	\datel, Pfunc(~knocker.(prob: 0.8))
-).play(t)
-)
+	\dur, 0.25,
+	\damp, Pexprand(1, 0.001),
+	\modFreq, Pkey(\freq) * 2,
+	\modDepth, Pseq([0, 1, 10, 20], inf),
+	\decay, Pn(Pgeom(1.0, 0.8, 8)),
+	\pan, Pwhite(-0.33, 0.33),
+	\datel, Pfunc(~knocker.(prob: 0.8)),
 
-(
-Pbindef(\test,
-	\freq, Pn(Plazy({ Pseq(~chord.(~chordPool).flatten) })).midicps * 0.5,
-	\dur, 0.25
-).play(t)
-)
-
-// frenetic glitch: one fixed rhythm cycle, arpeggiating the chord pool
-(
-Pbindef(\glitch,
-	\freq, Pn(Plazy({ Pseq(~chord.(~chordPool).flatten) })).midicps,
-	\dur, Pseq(~rhythm.(6, [3, 8], [1/12, 1/16, 1/8], [1.5, 2, 3]), inf)
+	\out,   ~pluckBus,
 ).play(t)
 )
 
@@ -252,7 +246,9 @@ Pbindef(\glitch,
 (
 Pbindef(\glitch,
 	\freq, Pn(Plazy({ Pseq(~chord.(~chordPool).flatten) })).midicps,
-	\dur, Pn(Plazy({ Pseq(~rhythm.(6, [3, 8], [1/12, 1/16, 1/8], [1.5, 2, 3])) }))
+	\dur, Pn(Plazy({ Pseq(~rhythm.(6, [3, 8], [1/12, 1/16, 1/8], [1.5, 2, 3])) })),
+	\out,   ~pluckBus,
+
 ).play(t)
 )
 
@@ -267,6 +263,7 @@ Pbindef(\glitch).stop
 (
 Pbindef(\glitch,
 	\instrument, \pluck,
+	\out, ~pluckBus,
 	\freq, Pn(Plazy({ Pseq(~stutter.(~chord.(~chordPool).flatten, 3, [2, 5])) })).midicps,
 	\dur, Pseq(~rhythm.(6, [3, 8], [1/12, 1/16, 1/8], [1.5, 2, 3]), inf),
 	\pan, Pwhite(-1, 1)
@@ -276,6 +273,7 @@ Pbindef(\glitch,
 (
 Pbindef(\test,
 	\instrument, \pluck,
+	\out, ~pluckBus,
 	\freq, Pseq(n, inf).midicps * 1,
 	\dur, 0.33
 ).play
@@ -334,6 +332,7 @@ t.tempo=1
 (
 Pbindef(\glitch,
 	\instrument, \pluck,
+	\out, ~pluckBus,
 	\freq, Pn(Plazy({ Pseq(~stutter.(~chord.(~chordPool).flatten, 3, [2, 5])) })).midicps *0.5,
 	\dur, Pseq(~rhythm.(6, [3, 8], [1/8, 1/6], [1.5, 2, 3]), inf),
 	\datel, Pfunc(~knocker.(prob: 1, dur: 1))
@@ -346,6 +345,7 @@ Pbindef(\glitch).stop;
 (
 Pbindef(\cr,
 	\instrument, \pluck,
+	\out, ~pluckBus,
 	\freq,  Pn(Plazy({ Pseq(~chord.(~chordPool).flatten) })).midicps,
 	\dur,   Pseq([Pn(1/8, 8), Pn(1/2, 3)], inf),     // fast call, slower reply
 	\knock, Pseq([Pn(0, 8),   Pn(1, 3)],   inf),
@@ -359,6 +359,7 @@ Pbindef(\cr).stop;
 (
 Pbindef(\cp,
 	\instrument, \pluck,
+	\out, ~pluckBus,
 	\freq,  Pn(Plazy({ Pseq(~chord.(~chordPool).flatten) })).midicps,
 	\dur,   Pseq([1/8, 1/8, 1/4], inf),
 	\knock, Pseq([0, 0, 1], inf),                    // every 3rd step -> node
@@ -380,18 +381,21 @@ Pdef.clear
 Pdef(\fxPluck, PbindFx([
 	\instrument, \pluck,
 	// \dur,   Prand([1, 0.5, 0.25], inf),
-	\dur, Pseq(~rhythm.(6, [3, 8], [1/8, 1/6], [1.5, 2, 3]), inf),
+	\dur, Pseq(~rhythm.(6, [3, 8], [1/8, 1/6, 1/16], [1.5, 2]), inf),
 
-	\amp,   Pwhite(0.5, 0.8, inf),
-	\amp,   Pseq([0.5, 0.5, 0], inf),              // SC silent on the node step
+	\amp,   Pwhite(0.05, 0.1, inf),
+	\amp,   Pseq([0.1, 0.12, 0], inf),              // SC silent on the node step
 	// \freq,  Pseq(~chord.([2, 12, 10]).flatten, inf).midicps * 0.5,
 	\freq, Pn(Plazy({ Pseq(~stutter.(~chord.(~chordPool).flatten, 3, [2, 5])) })).midicps *0.5,
 	\pan,   Pwhite(-0.7, 0.7),
 	\knock, Pseq([Pn(0, 8),   Pn(1, 3)],   inf),
-	// \c3,    Prand([10, 20, 40], inf),
-	\out,   0,
+	\damp, Pexprand(1, 0.001),
+	\modFreq, Pkey(\freq) * 2,
+	\modDepth, Prand([0, 1, 10, 20, 50], inf),
+
+	\out,   ~pluckBus,
 	\fxOrder, Prand([[2], [3], [4], [2, 1], [3, 1], [4, 1]], inf),
-	// \fxOrder, [4],
+	// \fxOrder, [2],
 	\cleanupDelay, 0.1,                     // pluck rings out; allow the tail
 	\datel, Pfunc(~knocker.(prob: 1, dur: rrand(500, 155))),     // notes also knock the swarm
 	\datel, Pfunc(~knocker.(dur: 100, mode: \pat, pat: "xx_x___x")),

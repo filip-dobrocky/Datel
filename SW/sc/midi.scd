@@ -22,7 +22,8 @@ CC:
     79  peck curve  (-10..10)
     80  peck amp    (0..1)
     81  density     (0..1 swarm activity density -> OSC /datel/density)
-    82  voice amp   (0..1 live level of all \voice synths, via ~voiceAmp bus)
+    82  pluck amp   (live level of the pluck submix, via ~pluckGain on ~pluckBus)
+    34  voice amp   (live level of all \voice synths, via ~voiceAmp bus)
     83  tempo       (sets OSC swarm BPM; TempoClock t runs at half that BPM)
     84  master level (server volume, as in garden-sc)
 */
@@ -65,6 +66,10 @@ MIDIdef.noteOn(\poolToggle, { |vel, num|
 MIDIdef.cc(\datelControls, { |val, num|
 	var scaled;
 	switch (num)
+	{34} {
+		scaled = ~midiLvlScale.(val);
+		~voiceAmp !? { ~voiceAmp.set(scaled) };   // live level of all \voice synths
+		"voice amp: % dB".format(scaled.ampdb.round(0.1)).postln }
 	{19} {
 		scaled = val.linexp(0, 127, 0.1, 4);
 		~reso !? { ~reso.set(\decayScale, scaled) };
@@ -99,8 +104,8 @@ MIDIdef.cc(\datelControls, { |val, num|
 		"density: %".format(scaled.round(1e-3)).postln }
 	{82} {
 		scaled = ~midiLvlScale.(val);
-		~voiceAmp !? { ~voiceAmp.set(scaled) };   // live level of all \voice synths
-		"voice amp: % dB".format(scaled.ampdb.round(0.1)).postln }
+		~pluckGain !? { ~pluckGain.set(\amp, scaled) };   // live level of the pluck submix
+		"pluck amp: % dB".format(scaled.ampdb.round(0.1)).postln }
 	{83} {
 		// CC -> swarm BPM; the TempoClock runs at half that BPM (in bps).
 		var bpm = val.linexp(0, 127, 60, 500);   // OSC swarm tempo (clamped there)
