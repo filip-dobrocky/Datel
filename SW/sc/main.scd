@@ -125,6 +125,27 @@ s.waitForBoot({
 		seq;
 	};
 
+	// ---- ratchet helper (TRUE stutter: subdivides the beat) ---------------
+	// ~stutter only repeats pitches at the prevailing durs. ~ratchet pairs each
+	// note with a base dur and, with `prob`, splits that slot into k repeats of
+	// dur/k (same pitch) -> a faster-than-the-beat rhythmic stutter.
+	// Returns [notes, durs] (equal length) — feed BOTH from one Plazy'd Pbind so
+	// the pitch repeats and the divided durs stay locked (see ratchet pattern).
+	//   notes : pitch array        dur  : base dur, number or pool (.choose/step)
+	//   prob  : 0..1 chance a slot ratchets   reps : [min, max] subdivisions
+	~ratchet = { |notes, dur = 0.25, prob = 0.3, reps|
+		var outN = [], outD = [];
+		reps = reps ? [2, 4];
+		notes.do { |note|
+			var d = dur.asArray.choose;
+			(prob.coin).if(
+				{ var k = rrand(reps[0], reps[1]);
+				  k.do { outN = outN.add(note); outD = outD.add(d / k) }; },
+				{ outN = outN.add(note); outD = outD.add(d); });
+		};
+		[outN, outD];
+	};
+
 	// --- SynthDefs ---------------------------------------------------------
 	this.executeFile(~dir +/+ "synthdefs/pluck.scd");
 	this.executeFile(~dir +/+ "synthdefs/fx.scd");
@@ -278,6 +299,24 @@ Pbindef(\test,
 	\dur, 0.33
 ).play
 )
+
+// TRUE STUTTER (ratchet): each cycle some slots subdivide into fast repeats.
+// Pdef (not Pbindef): the value is a whole Pbind regenerated per cycle, so the
+// repeated pitches and divided durs stay locked. Tweak prob / reps / dur pool.
+(
+Pdef(\ratchet, Pn(Plazy({
+	var r = ~ratchet.(~chord.(~chordPool).flatten.scramble, [1/4, 1/8, 1/2], 0.4, [2, 6]);
+	Pbind(
+		\instrument, \pluck,
+		\out, ~pluckBus,
+		\freq, Pseq(r[0], 1).midicps,
+		\dur,  Pseq(r[1], 1),
+		\pan,  Pwhite(-1, 1),
+		\datel, Pfunc(~knocker.(prob: 0.3))
+	)
+}))).play(t)
+)
+Pdef(\ratchet).stop
 
 // drone: bursts of ~10 sustained voices (80% hit), then an 18s gap, forever.
 // Voices self-free, so they ring while the pattern moves on (was a Tdef).
