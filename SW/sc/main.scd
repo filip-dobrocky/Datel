@@ -192,7 +192,8 @@ s.waitForBoot({
 	// swarm (e.g. silence SC with \amp 0 while \knock stays 1 -> node-only reply).
 	//   prob : 0..1 chance an eligible event fires nodes
 	//   dur  : peck length (ms)      mode : \peck (default) or \hit
-	~knocker = { |prob = 1, dur = 200, mode = \peck, peckFreq = 15, peckAmp = 1, pat = "x", amp = 1|
+	//   peckFreq : peck roll rate    peckAmp : peck amplitude    pat : \hit-mode pattern
+	~knocker = { |prob = 1, dur = 200, mode = \peck, peckFreq = 15, peckAmp = 1, pat = "x"|
 		{ |ev|
 			var rest = (ev[\type] == \rest) or: { ev[\dur].isRest };
 			var gate = (ev[\knock] ? 1) * prob;
@@ -201,7 +202,7 @@ s.waitForBoot({
 			(rest.not and: { freq.notNil } and: { gate.coin }).if {
 				var ids = freq.asArray.collect { |f| ~nodeOf.(f.cpsmidi) }.reject(_.isNil).as(Set).asArray;
 				(mode == \peck).if(
-					{ ~nodePeck.(ids, peckFreq, dur, 0, amp) },
+					{ ~nodePeck.(ids, peckFreq, dur, 0, peckAmp) },
 					{ ~nodePat.(ids, pat) });
 			};
 			ev;   // must never return nil (nil would end the pattern)
@@ -323,7 +324,7 @@ Pdef(\ratchet, Pn(Plazy({
 		\modDepth, Pseq([0, 1, 5, 10], inf),
 		\decay, Pn(Pgeom(1.5, 0.9, 8)),
 		\pan, Pwhite(-0.33, 0.33),
-		\datel, Pfunc(~knocker.(prob: 0.3))
+		\datel, Pfunc(~knocker.(prob: 1))
 	)
 }))).play(t)
 )
@@ -484,15 +485,16 @@ Pdef(\fxPluck).stop;
 // The source is a whole event pattern (Pn+Plazy+Pbind) so the ratcheted freq/dur
 // stay locked; PbindFx reads \fxOrder / \cleanupDelay / etc. from those events.
 (
+Pbindef(\ratchet).stop;
 Pdef(\fxRatchet, PbindFx(
 	Pn(Plazy({
 		var r = ~ratchet.(~chord.(~chordPool).flatten.scramble, [1/4, 1/8, 1/2, 1/16], 0.5, [2, 6]);
 		Pbind(
 			\instrument, \pluck,
 			\out,    ~pluckBus,
-			\freq,   Pseq(r[0], 1).midicps * 0.5,
+			\freq,   Pseq(r[0], 1).midicps * 0.25,
 			\dur,    Pseq(r[1], 1),
-			\amp,    Pwhite(-24, -16).dbamp,
+			\amp,    Pwhite(-18, -8).dbamp,
 			\pan,    Pwhite(-0.7, 0.7),
 			\damp,   Pexprand(1, 0.001),
 			\modFreq, Pkey(\freq) * 2,
@@ -502,7 +504,7 @@ Pdef(\fxRatchet, PbindFx(
 			\fxOrder, Pfunc({ |ev|
 				if (ev[\dur] > 0.1) { [[1], [2], [3], [4], [2, 1], [3, 1]].choose } { [0, [4]].choose } }),
 			\cleanupDelay, 0.3,
-			\datel,  Pfunc(~knocker.(prob: 0.1))
+			\datel, Pfunc({ |ev| ~knocker.(prob: 0.1, dur: rrand(300, 1000), peckAmp: ev[\amp]).(ev) })
 		)
 	})),
 	[
@@ -528,7 +530,7 @@ Pdef(\fxRatchet, PbindFx(
 	], [
 		\fx, \pitchShifterFx,
 		\mix, Prand([0.2, 0.5, 0.7], inf),
-		\ratio, Prand([0.5, 2, 3, 4, 6], inf),
+		\ratio, Prand([2, 3, 4, 6], inf),
 		\cleanupDelay, 0.8
 	]
 )).play(t);
