@@ -24,10 +24,25 @@
 
 #define BAT_PIN 3
 
+// Master-velocity response curve. A linear amplitude gain feels too sensitive
+// at the low end (perceived loudness is roughly logarithmic), so the normalized
+// 0..1 control is skewed by norm^gamma before mapping to the 0..255 byte. gamma
+// > 1 expands the low end (gentler control there); 1.0 = linear.
+#ifndef VELOCITY_GAMMA
+#define VELOCITY_GAMMA 2.0f
+#endif
+
+// Skewed norm (0..1) -> master gain byte (0..255). Used by both the OSC and the
+// mesh velocity handlers so every node maps velocity identically.
+static inline uint8_t velocity_to_byte(float norm) {
+    norm = constrain(norm, 0.0f, 1.0f);
+    return (uint8_t)roundf(powf(norm, VELOCITY_GAMMA) * 255.0f);
+}
+
 // Bump for every OTA release. Travels in the mesh "ping" and the /info/ping
 // OSC telemetry, so the controller can watch each node flip to the new
 // version as the swarm updates (old pre-versioning firmware reports 0).
-#define FW_VERSION 6
+#define FW_VERSION 7
 
 const char *TAG = "Datel";
 
@@ -151,7 +166,7 @@ static void on_knocking(JsonDocument &doc, uint32_t /*from*/) {
         }
     }
 
-    suspendMgr.setSuspended(true, scaleByDensity(SUSPEND_SHORT));
+    suspendMgr.setSuspended(true, SUSPEND_SHORT);
 }
 
 static void on_knocked(JsonDocument & /*doc*/, uint32_t /*from*/) {
@@ -174,7 +189,7 @@ static void on_tweeting(JsonDocument &doc, uint32_t /*from*/) {
                  new_tempo);
     }
 
-    suspendMgr.setSuspended(true, scaleByDensity(SUSPEND_SHORT));
+    suspendMgr.setSuspended(true, SUSPEND_SHORT);
 }
 
 static void on_tweeted(JsonDocument & /*doc*/, uint32_t /*from*/) {
@@ -218,7 +233,7 @@ static void on_battery(JsonDocument &doc, uint32_t /*from*/) {
 static void on_velocity(JsonDocument &doc, uint32_t /*from*/) {
     float norm = doc["value"] | 0.0f;
     norm = constrain(norm, 0.0f, 1.0f);
-    knocker.setVelocity((uint8_t)roundf(norm * 255.0f));
+    knocker.setVelocity(velocity_to_byte(norm));
     ESP_LOGI(TAG, "Mesh velocity: %.3f", norm);
 }
 
@@ -250,6 +265,7 @@ static void on_blinking(JsonDocument &doc, uint32_t /*from*/) {
 
 static void on_density(JsonDocument &doc, uint32_t /*from*/) {
     g_density = constrain((float)(doc["value"] | 0.0f), 0.0f, 1.0f);
+    suspendMgr.rescaleTimers();  // apply to any in-flight suspend/idle wait
     ESP_LOGI(TAG, "Mesh density: %.3f", g_density);
 }
 
@@ -348,6 +364,10 @@ void setup() {
     });
     suspendMgr.onIdle([]() { if (g_listen) knocker.knock(); });
 
+    // Density scales every suspend/idle duration; registering it here lets the
+    // manager re-derive live timers when /density changes (see rescaleTimers).
+    suspendMgr.setTimeScaler(scaleByDensity);
+
     // Blink the builtin LED while paused (low-duty heartbeat; off at rest).
     // The onboard GPIO8 LED is active-low. Managed on the shared scheduler.
     suspendMgr.setPauseLed(LED_PIN, /*active_high=*/false, /*on_ms=*/60,
@@ -366,8 +386,8 @@ void setup() {
 
     knocker.setOnFinished([]() {
         ESP_LOGI(TAG, "Knocking finished");
-        suspendMgr.pokeIdle(scaleByDensity(45000UL));
-        suspendMgr.setSuspended(true, scaleByDensity(SUSPEND_LONG));
+        suspendMgr.pokeIdle(45000UL);
+        suspendMgr.setSuspended(true, SUSPEND_LONG);
         send_knocked();
         knocking = false;
     });
@@ -477,10 +497,10 @@ void osc_velocity_received(OSCMessage &m) {
     }
     norm = constrain(norm, 0.0f, 1.0f);
 
-    knocker.setVelocity((uint8_t)roundf(norm * 255.0f));
+    knocker.setVelocity(velocity_to_byte(norm));
     ESP_LOGI(TAG, "OSC velocity: %.3f", norm);
 
-    send_velocity(norm);  // distribute to the rest of the swarm
+    send_velocity(norm);  // distribute the raw norm; each node applies the skew
 }
 
 void osc_auto_received(OSCMessage &m) {
@@ -552,6 +572,7 @@ void osc_density_received(OSCMessage &m) {
     float v = m.isInt(0) ? (float)m.getInt(0) : m.getFloat(0);
     v = constrain(v, 0.0f, 1.0f);
     g_density = v;
+    suspendMgr.rescaleTimers();  // apply to any in-flight suspend/idle wait
     eco.broadcast("density", [v](JsonDocument &d) { d["value"] = v; });
     ESP_LOGI(TAG, "OSC density: %.3f (broadcast to mesh)", v);
 }
@@ -585,7 +606,7 @@ void osc_reset_received(OSCMessage & /*m*/) {
 // === Helpers ===
 void set_listen(bool v) {
     g_listen = v;
-    if (v) suspendMgr.pokeIdle(scaleByDensity(IDLE_TIMEOUT));  // re-arm idle self-trigger
+    if (v) suspendMgr.pokeIdle(IDLE_TIMEOUT);  // re-arm idle self-trigger (density-scaled)
     else suspendMgr.cancelIdle();              // stop self-triggering when quiet
     ESP_LOGI(TAG, "Listen: %d", v);
 }

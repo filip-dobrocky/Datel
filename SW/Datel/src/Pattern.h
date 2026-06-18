@@ -27,7 +27,7 @@
 #define HIT_AMP_MIN 60        // floor for hit velocity (audible solenoid)
 #endif
 #ifndef PECK_AMP_MIN
-#define PECK_AMP_MIN 128      // floor for peck amplitude
+#define PECK_AMP_MIN 80      // floor for peck amplitude
 #endif
 #ifndef HIT_AMP_DEFAULT
 #define HIT_AMP_DEFAULT 200   // velocity for a bare "x"
