@@ -251,7 +251,7 @@ s.waitForBoot({
 ~auto.(0);                 // freeze the swarm (manual mode)
 ~auto.(1);                 // back to autonomous emergent behaviour
 ~pattern.(3, "xx_p750AFF_xx_");
-~peck.(, 16, 2000, 6, 1.0);
+~peck.(10, 16, 2000, 6, 1.0);
 ~tempo.(120);
 ~reset.();
 

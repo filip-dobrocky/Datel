@@ -10,7 +10,7 @@ Ports / addresses (lib/Ecosystem/src/EcosystemConfig.h + src/main.cpp):
   send (telemetry <- node): 54355, base "/info", softAP-directed broadcast (10.x.y.255)
 
 Exposes the ~helpers (~auto, ~listen, ~pattern, ~peck, ~pause, ~velocity,
-~blinking, ~density, ~tempo, ~tempoRand, ~sustain, ~reset) and ~node / ~ip.
+~velocityId, ~blinking, ~density, ~tempo, ~tempoRand, ~sustain, ~reset) and ~node / ~ip.
 */
 
 (
@@ -63,6 +63,9 @@ Exposes the ~helpers (~auto, ~listen, ~pattern, ~peck, ~pause, ~velocity,
 
 // master gain for every hit/peck, 0..1.
 ~velocity = { |v = 1| ~node.sendMsg("/datel/velocity", v.asFloat) };
+
+// per-node gain, 0..1 (fw >= 8). a later global ~velocity overrides it.
+~velocityId = { |id, v = 1| ~node.sendMsg("/datel/velocity/id", id.asInteger, v.asFloat) };
 
 // enable(1)/disable(0) the LED blink while paused / low battery (default on).
 ~blinking = { |on = 1| ~node.sendMsg("/datel/blinking", on.asInteger) };

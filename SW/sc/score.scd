@@ -1,6 +1,11 @@
 ~findNode.();              // re-detect the node after reconnecting Wi-Fi
+~pause.(0)
 
 //--- 1. auto off, play different patterns on different woodpeckers gradually, turn on listen, then auto on, play with density
+(
+~pause.(0);
+~blinking.(1);
+)
 ~reset.()
 ~auto.(0)
 
@@ -11,7 +16,7 @@
 ~pattern.(10, "pCA99FF_xf0x6fx_");
 
 ~nodeListen.([6, 7, 8, 4, 9, 10], 1);
-~nodeListen.([0, 1, 2, 3, 6, 7, 8, 4, 9, 10], 0);
+~nodeListen.([0, 1, 2, 3, 6, 7, 8, 4, 9, 10], 1);
 
 ~auto.(1)
 
@@ -62,7 +67,7 @@ Pbindef(\hopcip,
 	\decay, Pn(Pgeom(1.0, 0.8, 8)),
 	\pan, Pwhite(-0.33, 0.33),
 	\datel, Pfunc(~knocker.(prob: 0)),
-	\datel, Pfunc(~knocker.(prob: 0.1, dur: 500)),
+	\datel, Pfunc(~knocker.(prob: 1, dur: 500)),
 	\amp, 0.17,
 
 	\out,   ~pluckBus2,
@@ -119,7 +124,7 @@ Pdef(\fxRatchet, PbindFx(
 			\fxOrder, Pfunc({ |ev|
 				if (ev[\dur] > 0.1) { [[1], [2], [3], [4], [2, 1], [3, 1]].choose } { [0, [4]].choose } }),
 			\cleanupDelay, 0.3,
-			\datel, Pfunc({ |ev| ~knocker.(prob: 0.1, dur: rrand(300, 1000), peckAmp: ev[\amp]).(ev) })
+			\datel, Pfunc({ |ev| ~knocker.(prob: 1, dur: rrand(300, 1000), peckAmp: ev[\amp]).(ev) })
 		)
 	})),
 	[
@@ -163,9 +168,10 @@ Pbindef(\voices).play
 
 // 5. fade out
 
+~loop.set(\decay, 20);
 ~loop.set(\gate, 0)
 
-~auto.(0);
+~auto.(1);
 
 ~pause.(1);
 ~pause.(0);

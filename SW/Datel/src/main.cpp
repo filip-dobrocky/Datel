@@ -42,7 +42,7 @@ static inline uint8_t velocity_to_byte(float norm) {
 // Bump for every OTA release. Travels in the mesh "ping" and the /info/ping
 // OSC telemetry, so the controller can watch each node flip to the new
 // version as the swarm updates (old pre-versioning firmware reports 0).
-#define FW_VERSION 7
+#define FW_VERSION 8
 
 const char *TAG = "Datel";
 
@@ -103,6 +103,7 @@ void send_velocity(float norm_value);
 
 void osc_pause_received(OSCMessage &m);
 void osc_velocity_received(OSCMessage &m);
+void osc_velocity_id_received(OSCMessage &m);
 void osc_auto_received(OSCMessage &m);
 void osc_listen_received(OSCMessage &m);
 void osc_pattern_received(OSCMessage &m);
@@ -237,6 +238,15 @@ static void on_velocity(JsonDocument &doc, uint32_t /*from*/) {
     ESP_LOGI(TAG, "Mesh velocity: %.3f", norm);
 }
 
+// Per-node velocity. Separate mesh type (not "velocity" + target_id) so nodes
+// on older firmware, whose on_velocity has no id filter, ignore it.
+static void on_velocity_id(JsonDocument &doc, uint32_t /*from*/) {
+    if ((doc["id"] | -1) != g_obj_id) return;
+    float norm = constrain((float)(doc["value"] | 0.0f), 0.0f, 1.0f);
+    knocker.setVelocity(velocity_to_byte(norm));
+    ESP_LOGI(TAG, "Mesh velocity/id: %.3f", norm);
+}
+
 static void on_auto(JsonDocument &doc, uint32_t /*from*/) {
     int v = doc["state"] | 1;
     g_auto = (v != 0);
@@ -326,6 +336,7 @@ void setup() {
     eco.onMessage("suspended", on_suspended);
     eco.onMessage("battery", on_battery);
     eco.onMessage("velocity", on_velocity);
+    eco.onMessage("velocityId", on_velocity_id);
     eco.onMessage("auto", on_auto);
     eco.onMessage("listen", on_listen);
     eco.onMessage("pattern", on_pattern);
@@ -338,6 +349,7 @@ void setup() {
 
     eco.onOsc("/pause", osc_pause_received);
     eco.onOsc("/velocity", osc_velocity_received);
+    eco.onOsc("/velocity/id", osc_velocity_id_received);
     eco.onOsc("/auto", osc_auto_received);
     eco.onOsc("/listen", osc_listen_received);
     eco.onOsc("/pattern", osc_pattern_received);
@@ -501,6 +513,20 @@ void osc_velocity_received(OSCMessage &m) {
     ESP_LOGI(TAG, "OSC velocity: %.3f", norm);
 
     send_velocity(norm);  // distribute the raw norm; each node applies the skew
+}
+
+// /velocity/id <int id> <float norm 0..1>
+void osc_velocity_id_received(OSCMessage &m) {
+    if (m.size() < 2) return;
+    int id = m.getInt(0);
+    float norm = m.isFloat(1) ? m.getFloat(1) : (float)m.getInt(1);
+    norm = constrain(norm, 0.0f, 1.0f);
+    if (id == g_obj_id) knocker.setVelocity(velocity_to_byte(norm));
+    eco.broadcast("velocityId", [id, norm](JsonDocument &d) {
+        d["id"] = id;
+        d["value"] = norm;
+    });
+    ESP_LOGI(TAG, "OSC velocity/id: id=%d %.3f (broadcast to mesh)", id, norm);
 }
 
 void osc_auto_received(OSCMessage &m) {
