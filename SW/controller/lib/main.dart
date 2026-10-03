@@ -47,7 +47,7 @@ class Home extends StatelessWidget {
             bottom: TabBar(tabs: [for (final p in swarm.profiles) Tab(text: p.name)]),
           ),
           body: Column(children: [
-            const ConnectionBar(),
+            ConnectionBar(), // no const: must rebuild on swarm changes
             Expanded(
               child: TabBarView(children: [
                 for (final p in swarm.profiles) ProfilePage(p),

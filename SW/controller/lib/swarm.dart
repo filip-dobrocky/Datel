@@ -256,6 +256,20 @@ class Swarm extends ChangeNotifier {
     } catch (e) {
       _setStatus('findNode: $e');
     }
+    // Fallback (Android's gateway lookup often returns nothing): our own
+    // 10.x.y.z address on the softAP means the node is 10.x.y.1.
+    if (gw == null || !gw.startsWith('10.')) {
+      final ifs = await NetworkInterface.list(type: InternetAddressType.IPv4);
+      // wlan first: mobile data can also be 10.x (carrier NAT).
+      ifs.sort((a, b) => (b.name.startsWith('wlan') ? 1 : 0) - (a.name.startsWith('wlan') ? 1 : 0));
+      for (final i in ifs) {
+        final a = i.addresses.where((a) => a.address.startsWith('10.')).firstOrNull;
+        if (a != null) {
+          gw = '${a.address.substring(0, a.address.lastIndexOf('.'))}.1';
+          break;
+        }
+      }
+    }
     if (gw != null && gw.startsWith('10.')) {
       ip = gw;
       _setStatus('node at $ip');
